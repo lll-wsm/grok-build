@@ -54,12 +54,15 @@ use palette::*;
 impl Theme {
     pub const fn grokday() -> Self {
         Self {
-            bg_base: BG_STORM,
-            bg_light: BG_HIGHLIGHT,
-            bg_dark: rgb(228, 228, 228),
-            bg_highlight: BG_HIGHLIGHT,
-            bg_hover: rgb(208, 208, 208),
-            bg_terminal: BG,
+            // 背景全部改为 Color::Reset(透明),交给终端自身的背景色,
+            // 去掉原 #eeeeee 灰色铺底。前景/强调色保持浅色主题不变。
+            // (与 terminal_default 主题用 Reset 透出终端画布同思路。)
+            bg_base: Color::Reset,
+            bg_light: Color::Reset,
+            bg_dark: Color::Reset,
+            bg_highlight: Color::Reset,
+            bg_hover: Color::Reset,
+            bg_terminal: Color::Reset,
 
             accent_user: FG_DARK,
             accent_assistant: MAGENTA,
@@ -100,7 +103,7 @@ impl Theme {
 
             accent_model: TEAL,
 
-            scrollbar_bg: BG_STORM_DARK,
+            scrollbar_bg: Color::Reset,
             scrollbar_fg: BG_HIGHLIGHT,
 
             diff_delete_bg: RED_LIGHT,
@@ -110,9 +113,9 @@ impl Theme {
             diff_equal_fg: COMMENT,
             diff_gutter_fg: COMMENT,
 
-            bg_visual: rgb(198, 198, 198),
+            bg_visual: Color::Reset,
 
-            paste_bg: BG_HIGHLIGHT,
+            paste_bg: Color::Reset,
             paste_fg: FG_DARK,
             paste_dim: FG_GUTTER,
 
@@ -132,7 +135,7 @@ impl Theme {
             md_task_checked: GREEN,
             md_task_unchecked: FG_DARK,
             md_muted: COMMENT,
-            md_code_bg: rgb(228, 228, 228),
+            md_code_bg: Color::Reset,
             md_text: FG_DARK,
             link_fg: BLUE, // #2F64D2 -- deep blue for light bg
         }
