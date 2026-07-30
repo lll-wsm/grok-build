@@ -242,6 +242,7 @@ pub(super) async fn make_replay_send_update_fixture() -> ReplaySendUpdateFixture
         session_turn_active: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
         streaming_turn_capture: parking_lot::Mutex::new(StreamingTurnCapture::default()),
         turn_stream_drained: parking_lot::Mutex::new(None),
+            truncation_continues: std::sync::atomic::AtomicU32::new(0),
         sampler_handle: xai_grok_sampler::SamplerHandle::noop(),
         rebuild_spec: crate::session::agent_rebuild::test_rebuild_spec_default(),
         image_description_model: crate::test_support::TEST_MODEL.to_owned(),
@@ -1223,7 +1224,7 @@ async fn reasoning_only_doomloop_turn_captures_every_generation_as_segments() {
                     error: error.clone(),
                 })
                 .await;
-            let Err(_terminal) = actor.handle_sampling_failure(error).await else {
+            let Err(_terminal) = actor.handle_sampling_failure(error, None).await else {
                 panic!("a reasoning_only empty response must be a terminal error, not recoverable");
             };
             let (cmd_tx, cmd_rx) = mpsc::unbounded_channel::<SessionCommand>();

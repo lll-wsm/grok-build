@@ -2201,6 +2201,16 @@ impl SessionActor {
                     auth_retry_schedule.reset();
                     continue;
                 }
+                Ok(SamplerTurnOutcome::ContinueAfterTruncation) => {
+                    // The truncated partial was committed to chat state and a
+                    // synthetic `auto_continue` user turn appended by
+                    // `handle_sampling_failure`. Rebuild the request from the
+                    // latest chat state (loop top) and resubmit - the model
+                    // resumes from where it was cut off. Bounded by
+                    // `MAX_TRUNCATION_CONTINUES` in `handle_sampling_failure`.
+                    auth_retry_schedule.reset();
+                    continue;
+                }
                 Ok(SamplerTurnOutcome::RefreshAuthAndResubmit) => {
                     if let Some((attempt, delay)) = auth_retry_schedule.next_delay() {
                         let delay_ms = delay.as_millis() as u64;

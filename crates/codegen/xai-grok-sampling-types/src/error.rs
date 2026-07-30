@@ -116,8 +116,25 @@ pub enum SamplingError {
     IdleTimeout { elapsed_secs: u64 },
     #[error("empty response from model ({})", context.reason)]
     EmptyResponse { context: EmptyResponseContext },
+    /// The model's single response hit the `max_tokens` output cap
+    /// (`finish_reason: "length"`). `partial_content` carries the text
+    /// the model produced on the content channel before being cut off,
+    /// and `partial_reasoning` the reasoning/thinking channel text -
+    /// either may be `None` (e.g. a reasoning model truncated
+    /// mid-thinking has content=`None` but reasoning=`Some`). The shell
+    /// commits whatever is present and auto-continues so the model
+    /// resumes from where it was cut off, effectively extending the
+    /// output budget across continuation segments. Both `None` only
+    /// when nothing was produced (rare); callers then fall back to the
+    /// legacy terminal behaviour. NOT retryable by the transport retry
+    /// loop - replaying the identical request would truncate
+    /// identically. Recovery (auto-continue) is decided one layer up,
+    /// in the shell, not here.
     #[error("response truncated by max_tokens")]
-    MaxTokensTruncation,
+    MaxTokensTruncation {
+        partial_content: Option<String>,
+        partial_reasoning: Option<String>,
+    },
     /// A confident server-reported doom loop on the attempt (mid-stream or
     /// on the completed response). Retryable on the recovery loop's own
     /// budget, separate from the transport budget. Carries the raw trigger
@@ -250,7 +267,7 @@ impl SamplingError {
             SamplingError::StreamError { .. } => true,
             SamplingError::IdleTimeout { .. } => false,
             SamplingError::EmptyResponse { .. } => true,
-            SamplingError::MaxTokensTruncation => false,
+            SamplingError::MaxTokensTruncation { .. } => false,
             SamplingError::DoomLoopDetected { .. } => true,
         }
     }

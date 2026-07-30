@@ -313,6 +313,7 @@ async fn test_e2e_idle_resume_refreshes_model_metadata() {
                 session_turn_active: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
                 streaming_turn_capture: parking_lot::Mutex::new(StreamingTurnCapture::default()),
                 turn_stream_drained: parking_lot::Mutex::new(None),
+            truncation_continues: std::sync::atomic::AtomicU32::new(0),
                 sampler_handle: xai_grok_sampler::SamplerHandle::noop(),
                 rebuild_spec: crate::session::agent_rebuild::test_rebuild_spec_default(),
                 image_description_model: crate::test_support::TEST_MODEL.to_owned(),

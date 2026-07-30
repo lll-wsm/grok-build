@@ -70,7 +70,7 @@ fn classify_sampling_error(err: SamplingError) -> CompactFailure {
                     && *status != StatusCode::REQUEST_TIMEOUT
                     && *status != StatusCode::TOO_MANY_REQUESTS)
         }
-        SamplingError::MaxTokensTruncation => true,
+        SamplingError::MaxTokensTruncation { .. } => true,
         SamplingError::Http(_)
         | SamplingError::EventStreamError(_)
         | SamplingError::StreamError { .. }

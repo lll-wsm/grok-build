@@ -363,7 +363,7 @@ pub fn format_sampling_error(err: &SamplingError, retry_count: Option<u32>) -> S
                 context.completion_tokens.unwrap_or(0),
             )
         }
-        SamplingError::MaxTokensTruncation => {
+        SamplingError::MaxTokensTruncation { .. } => {
             format!("{}Response truncated by max_tokens.", retry_prefix)
         }
         SamplingError::DoomLoopDetected { triggers, .. } => {
@@ -429,7 +429,13 @@ pub(crate) fn clone_error(err: &SamplingError) -> SamplingError {
         SamplingError::EmptyResponse { context } => SamplingError::EmptyResponse {
             context: context.clone(),
         },
-        SamplingError::MaxTokensTruncation => SamplingError::MaxTokensTruncation,
+        SamplingError::MaxTokensTruncation {
+            partial_content,
+            partial_reasoning,
+        } => SamplingError::MaxTokensTruncation {
+            partial_content: partial_content.clone(),
+            partial_reasoning: partial_reasoning.clone(),
+        },
         SamplingError::DoomLoopDetected {
             triggers,
             aborted_at_chunk,

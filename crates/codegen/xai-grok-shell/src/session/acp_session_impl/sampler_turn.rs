@@ -2,6 +2,44 @@
 //! facts/gates and retry, sampler config reconstruction, sampling-failure
 //! recovery, and per-response usage recording.
 use super::*;
+/// Maximum number of consecutive `max_tokens` output-truncation auto-continues
+/// allowed within a single turn before we give up and surface a terminal
+/// failure. A safety valve against a pathological model that never stops
+/// generating: realistic long outputs finish in 1-2 continues and never reach
+/// this. Reset on any non-truncated outcome.
+pub(crate) const MAX_TRUNCATION_CONTINUES: u32 = 8;
+/// Synthetic user-turn prompt injected after committing a truncated partial so
+/// the model resumes from where it was cut off. Tagged `auto_continue` (not a
+/// real user turn) via `ConversationItem::auto_continue`, so it is excluded
+/// from real-user-message counting / compaction boundaries exactly like the
+/// post-compaction continue prompt.
+pub(crate) const OUTPUT_TRUNCATION_CONTINUE_PROMPT: &str = "Continue your previous response from exactly where it was cut off. Do not repeat, rephrase, or re-emit anything you already wrote; resume the output directly.";
+
+/// The truncated output the model produced before hitting `max_tokens`,
+/// split by channel so the shell can commit each piece and auto-continue.
+/// `content` is the visible answer text; `reasoning` is the
+/// thinking/reasoning-channel text (reasoning models truncated
+/// mid-thinking have `content = None` but `reasoning = Some`). Either
+/// may be `None`; both `None` means nothing was produced and the
+/// truncation falls back to the legacy terminal path.
+///
+/// `From<Option<String>>` keeps the historical call shape (content only)
+/// working at existing call sites.
+#[derive(Debug, Default, Clone)]
+pub(crate) struct TruncationPartial {
+    pub content: Option<String>,
+    pub reasoning: Option<String>,
+}
+
+impl From<Option<String>> for TruncationPartial {
+    fn from(content: Option<String>) -> Self {
+        Self {
+            content,
+            ..Self::default()
+        }
+    }
+}
+
 /// Auth-failure detector for tool errors. Matches strictly on HTTP 401
 /// when the error carries a structured status code, mirroring
 /// `SamplingError::is_auth_error` in xai-grok-sampling-types: 403 is
@@ -778,8 +816,10 @@ impl SessionActor {
     pub(crate) async fn handle_sampling_failure(
         self: &Arc<Self>,
         error: xai_grok_sampler::SamplingErrorInfo,
+        truncation_partial: impl Into<TruncationPartial>,
     ) -> Result<SamplerFailureRecovery, acp::Error> {
         use xai_grok_sampler::SamplingErrorKind;
+        let truncation_partial = truncation_partial.into();
         if self.tool_context.task_output_token_budget.is_some() {
             self.tool_context.fail_task_output_usage_closed();
             let message = format!(
@@ -804,6 +844,73 @@ impl SessionActor {
                 &message,
             );
             return Err(acp::Error::internal_error().data(message));
+        }
+        // `max_tokens` output truncation: instead of a terminal failure, commit
+        // the partial text the model already produced and inject a synthetic
+        // `auto_continue` user turn so the outer loop resubmits and the model
+        // resumes from where it was cut off. Bounded by `MAX_TRUNCATION_CONTINUES`;
+        // on cap exhaustion, or when no partial text is available, we fall
+        // through to the legacy terminal handling below.
+        if matches!(error.kind, SamplingErrorKind::MaxTokensTruncation) {
+            let count = self
+                .truncation_continues
+                .load(std::sync::atomic::Ordering::Relaxed);
+            if count >= MAX_TRUNCATION_CONTINUES {
+                self.truncation_continues
+                    .store(0, std::sync::atomic::Ordering::Relaxed);
+                self.log_terminal_failure(
+                    "max_tokens_truncation_cap_exhausted",
+                    error.status_code,
+                    &error.message,
+                );
+                // Fall through to the standard terminal path below.
+            } else {
+                let content = truncation_partial
+                    .content
+                    .as_deref()
+                    .filter(|s| !s.is_empty());
+                let reasoning = truncation_partial
+                    .reasoning
+                    .as_deref()
+                    .filter(|s| !s.is_empty());
+                if content.is_some() || reasoning.is_some() {
+                    self.truncation_continues
+                        .store(count + 1, std::sync::atomic::Ordering::Relaxed);
+                    // Preserve what the model already produced so the
+                    // continuation resumes from there rather than starting
+                    // over. Commit the reasoning sibling first (matching the
+                    // stream assembly order), then the assistant content. A
+                    // reasoning model truncated mid-thinking commits only the
+                    // reasoning, extending its thinking budget across segments.
+                    if let Some(reasoning) = reasoning {
+                        self.chat_state_handle.push_assistant_response(
+                            ConversationItem::Reasoning(
+                                xai_grok_sampling_types::synthesized_reasoning_item(
+                                    reasoning.to_owned(),
+                                ),
+                            ),
+                        );
+                    }
+                    if let Some(content) = content {
+                        self.chat_state_handle
+                            .push_assistant_response(ConversationItem::assistant(content.to_owned()));
+                    }
+                    // Synthetic (non-real) user turn: its `AutoContinue` tag
+                    // excludes it from compaction / real-message counting.
+                    self.chat_state_handle.push_user_message(
+                        ConversationItem::auto_continue(OUTPUT_TRUNCATION_CONTINUE_PROMPT),
+                    );
+                    tracing::warn!(
+                        continue_count = count + 1,
+                        has_content = content.is_some(),
+                        has_reasoning = reasoning.is_some(),
+                        "max_tokens truncation: committed partial and auto-continuing",
+                    );
+                    return Ok(SamplerFailureRecovery::ContinueAfterTruncation);
+                }
+                // Nothing produced on either channel -> fall through to the
+                // legacy terminal path below.
+            }
         }
         if self.should_compact_on_error(&error).await {
             let cw = error
@@ -1151,6 +1258,9 @@ impl SessionActor {
                          calls (eventId ordering may be imperfect this turn)"
                     );
                 }
+                // A clean response breaks any truncation-continue streak.
+                self.truncation_continues
+                    .store(0, std::sync::atomic::Ordering::Relaxed);
                 Ok(SamplerTurnOutcome::Response(
                     Box::new(response),
                     Box::new(metrics),
@@ -1158,13 +1268,29 @@ impl SessionActor {
             }
             Err(rich_err) => {
                 self.turn_stream_drained.lock().take();
+                // Surface the partial text the model produced before being cut
+                // off (populated on the `MaxTokensTruncation` variant) so
+                // `handle_sampling_failure` can commit it and auto-continue.
+                let truncation_partial = match &rich_err {
+                    xai_grok_sampling_types::SamplingError::MaxTokensTruncation {
+                        partial_content,
+                        partial_reasoning,
+                    } => TruncationPartial {
+                        content: partial_content.as_ref().cloned(),
+                        reasoning: partial_reasoning.as_ref().cloned(),
+                    },
+                    _ => TruncationPartial::default(),
+                };
                 let info = xai_grok_sampler::SamplingErrorInfo::from(&rich_err);
-                match self.handle_sampling_failure(info).await? {
+                match self.handle_sampling_failure(info, truncation_partial).await? {
                     SamplerFailureRecovery::CompactAndResubmit => {
                         Ok(SamplerTurnOutcome::CompactAndResubmit)
                     }
                     SamplerFailureRecovery::RefreshAuthAndResubmit => {
                         Ok(SamplerTurnOutcome::RefreshAuthAndResubmit)
+                    }
+                    SamplerFailureRecovery::ContinueAfterTruncation => {
+                        Ok(SamplerTurnOutcome::ContinueAfterTruncation)
                     }
                 }
             }

@@ -63,6 +63,23 @@ fn auth_error() -> xai_grok_sampler::SamplingErrorInfo {
     }
 }
 
+/// Build a `SamplingErrorInfo` of kind `MaxTokensTruncation` - the shape
+/// the sampler surfaces when a single response hits the `max_tokens`
+/// output cap (`finish_reason: "length"`).
+fn max_tokens_truncation_error() -> xai_grok_sampler::SamplingErrorInfo {
+    xai_grok_sampler::SamplingErrorInfo {
+        kind: xai_grok_sampler::SamplingErrorKind::MaxTokensTruncation,
+        message: "response truncated by max_tokens".to_string(),
+        status_code: None,
+        is_retryable: false,
+        retry_after_secs: None,
+        model_metadata: None,
+        empty_response_context: None,
+        doom_loop_triggers: None,
+        doom_loop_aborted_at_chunk: None,
+    }
+}
+
 /// Construct a test actor with the supplied `auth_manager` and
 /// session-token credentials wired in. Wraps the actor in `Arc`
 /// ready for `handle_sampling_failure`.
@@ -141,7 +158,7 @@ async fn no_emit_when_auth_manager_is_none() {
         .run_until(async {
             let (actor, _rx) = make_actor_with_auth_manager(None).await;
             crate::auth::attribution::reset_test_emit_count();
-            let _ = actor.handle_sampling_failure(auth_error()).await;
+            let _ = actor.handle_sampling_failure(auth_error(), None).await;
             assert_eq!(
                 crate::auth::attribution::test_emit_count(),
                 0,
@@ -167,7 +184,7 @@ async fn no_recovery_without_auth_manager() {
             )
             .await;
             crate::auth::attribution::reset_test_emit_count();
-            let result = actor.handle_sampling_failure(auth_error()).await;
+            let result = actor.handle_sampling_failure(auth_error(), None).await;
             assert!(
                 result.is_err(),
                 "no auth manager must fall through to terminal error"
@@ -194,7 +211,7 @@ async fn sampler_401_recovery_returns_refresh_and_retry() {
                 });
             let (_dir, am) = auth_manager_with_refresher(refresher);
             let (actor, _rx) = make_actor_with_auth_manager(Some(am)).await;
-            let result = actor.handle_sampling_failure(auth_error()).await;
+            let result = actor.handle_sampling_failure(auth_error(), None).await;
             assert!(
                 matches!(result, Ok(SamplerFailureRecovery::RefreshAuthAndResubmit)),
                 "session-based auth with a working refresher must return RefreshAuthAndResubmit"
@@ -229,7 +246,7 @@ async fn sampler_401_with_api_key_auth_skips_refresh_and_surfaces_error() {
             )
             .await;
 
-            let result = actor.handle_sampling_failure(auth_error()).await;
+            let result = actor.handle_sampling_failure(auth_error(), None).await;
 
             assert!(
                 result.is_err(),
@@ -544,7 +561,7 @@ async fn legacy_auth_hint_on_404_model_not_found() {
             });
 
             let (actor, _rx) = make_actor_with_auth_manager(Some(am)).await;
-            let result = actor.handle_sampling_failure(model_not_found_error()).await;
+            let result = actor.handle_sampling_failure(model_not_found_error(), None).await;
             let err = match result {
                 Err(e) => e,
                 Ok(_) => panic!("expected Err from handle_sampling_failure"),
@@ -612,7 +629,7 @@ async fn legacy_auth_hint_on_401_unauthorized() {
 
             let (actor, _rx) = make_actor_with_auth_manager(Some(am)).await;
             let result = actor
-                .handle_sampling_failure(unauthorized_401_error())
+                .handle_sampling_failure(unauthorized_401_error(), None)
                 .await;
             let err = match result {
                 Err(e) => e,
@@ -654,7 +671,7 @@ async fn no_legacy_hint_on_401_for_oidc_auth() {
 
             let (actor, _rx) = make_actor_with_auth_manager(Some(am)).await;
             let result = actor
-                .handle_sampling_failure(unauthorized_401_error())
+                .handle_sampling_failure(unauthorized_401_error(), None)
                 .await;
             let err = match result {
                 Err(e) => e,
@@ -695,7 +712,7 @@ async fn no_legacy_hint_for_oidc_auth() {
             });
 
             let (actor, _rx) = make_actor_with_auth_manager(Some(am)).await;
-            let result = actor.handle_sampling_failure(model_not_found_error()).await;
+            let result = actor.handle_sampling_failure(model_not_found_error(), None).await;
             let err = match result {
                 Err(e) => e,
                 Ok(_) => panic!("expected Err from handle_sampling_failure"),
@@ -767,7 +784,7 @@ async fn sampler_401_session_method_with_stale_api_key_auth_type_still_recovers(
             )
             .await;
 
-            let result = actor.handle_sampling_failure(auth_error()).await;
+            let result = actor.handle_sampling_failure(auth_error(), None).await;
 
             assert!(
                 matches!(result, Ok(SamplerFailureRecovery::RefreshAuthAndResubmit)),
@@ -801,7 +818,7 @@ async fn sampler_401_oidc_method_with_stale_api_key_auth_type_still_recovers() {
             )
             .await;
 
-            let result = actor.handle_sampling_failure(auth_error()).await;
+            let result = actor.handle_sampling_failure(auth_error(), None).await;
 
             assert!(
                 matches!(result, Ok(SamplerFailureRecovery::RefreshAuthAndResubmit)),
@@ -1247,7 +1264,7 @@ async fn sampler_401_on_provider_model_remints_and_resubmits() {
                 std::time::Duration::from_secs(60),
             );
 
-            let result = actor.handle_sampling_failure(auth_error()).await;
+            let result = actor.handle_sampling_failure(auth_error(), None).await;
             assert!(
                 matches!(result, Ok(SamplerFailureRecovery::RefreshAuthAndResubmit)),
                 "provider 401 must re-mint and resubmit"
@@ -1283,7 +1300,7 @@ async fn sampler_non_auth_kind_401_on_provider_model_still_recovers() {
 
             let mut error = auth_error();
             error.kind = xai_grok_sampler::SamplingErrorKind::Api;
-            let result = actor.handle_sampling_failure(error).await;
+            let result = actor.handle_sampling_failure(error, None).await;
             assert!(
                 matches!(result, Ok(SamplerFailureRecovery::RefreshAuthAndResubmit)),
                 "a non-Auth-kind 401 on a provider model must still recover via 4c"
@@ -1315,7 +1332,7 @@ async fn sampler_401_with_no_key_on_provider_model_mints_and_resubmits() {
             actor.chat_state_handle.update_credentials(creds);
             seed_provider_memo(&actor, provider).await;
 
-            let result = actor.handle_sampling_failure(auth_error()).await;
+            let result = actor.handle_sampling_failure(auth_error(), None).await;
             assert!(
                 matches!(result, Ok(SamplerFailureRecovery::RefreshAuthAndResubmit)),
                 "an unauthenticated 401 on a provider model must mint and resubmit"
@@ -1358,7 +1375,7 @@ async fn sampler_401_on_provider_model_never_refreshes_session() {
                 std::time::Duration::from_secs(60),
             );
 
-            let result = actor.handle_sampling_failure(auth_error()).await;
+            let result = actor.handle_sampling_failure(auth_error(), None).await;
             assert!(
                 matches!(result, Ok(SamplerFailureRecovery::RefreshAuthAndResubmit)),
                 "the provider arm must recover"
@@ -1439,7 +1456,7 @@ async fn sampler_401_on_fresh_provider_token_surfaces_error() {
             .await;
             seed_provider_memo(&actor, provider).await;
 
-            let result = actor.handle_sampling_failure(auth_error()).await;
+            let result = actor.handle_sampling_failure(auth_error(), None).await;
             assert!(
                 result.is_err(),
                 "a fresh-minted rejected token must surface the 401, not loop"
@@ -1449,6 +1466,105 @@ async fn sampler_401_on_fresh_provider_token_surfaces_error() {
                 creds.api_key.as_deref(),
                 Some(token.as_str()),
                 "credentials must be unchanged when the guard blocks the re-mint"
+            );
+        })
+        .await;
+}
+
+// `max_tokens` output-truncation auto-continue: instead of a terminal
+// failure, the partial the model produced is committed and a synthetic
+// `auto_continue` user turn injected, so the turn loop can resubmit and
+// the model resumes. Bounded by `MAX_TRUNCATION_CONTINUES` (in
+// `sampler_turn.rs`; mirrored here as a local to avoid coupling the test
+// to a private module path).
+const TEST_MAX_TRUNCATION_CONTINUES: u32 = 8;
+
+#[tokio::test(flavor = "current_thread")]
+async fn max_tokens_truncation_auto_continues_when_partial_present() {
+    let local = tokio::task::LocalSet::new();
+    local
+        .run_until(async {
+            let (actor, _rx) = build_actor().await;
+            // A truncation carrying the partial text the model produced should
+            // auto-continue, not surface a terminal failure.
+            let outcome = actor
+                .handle_sampling_failure(max_tokens_truncation_error(), Some("partial text".into()))
+                .await;
+            assert!(
+                matches!(outcome, Ok(SamplerFailureRecovery::ContinueAfterTruncation)),
+                "truncation with a partial should auto-continue, got {outcome:?}"
+            );
+        })
+        .await;
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn max_tokens_truncation_without_partial_is_terminal() {
+    let local = tokio::task::LocalSet::new();
+    local
+        .run_until(async {
+            let (actor, _rx) = build_actor().await;
+            // No partial available (reasoning/tool-call-only truncation) ->
+            // legacy terminal behaviour.
+            let outcome = actor
+                .handle_sampling_failure(max_tokens_truncation_error(), None)
+                .await;
+            assert!(
+                outcome.is_err(),
+                "truncation without a partial must stay terminal, got {outcome:?}"
+            );
+        })
+        .await;
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn max_tokens_truncation_cap_exhaustion_is_terminal() {
+    let local = tokio::task::LocalSet::new();
+    local
+        .run_until(async {
+            let (actor, _rx) = build_actor().await;
+            // The first MAX_TRUNCATION_CONTINUES truncations auto-continue...
+            for _ in 0..TEST_MAX_TRUNCATION_CONTINUES {
+                let outcome = actor
+                    .handle_sampling_failure(max_tokens_truncation_error(), Some("partial text".into()))
+                    .await;
+                assert!(
+                    matches!(outcome, Ok(SamplerFailureRecovery::ContinueAfterTruncation)),
+                    "under-cap truncation should auto-continue, got {outcome:?}"
+                );
+            }
+            // ...the next one exhausts the cap and surfaces a terminal failure.
+            let outcome = actor
+                .handle_sampling_failure(max_tokens_truncation_error(), Some("partial text".into()))
+                .await;
+            assert!(
+                outcome.is_err(),
+                "cap-exhausted truncation must be terminal, got {outcome:?}"
+            );
+        })
+        .await;
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn max_tokens_truncation_reasoning_only_auto_continues() {
+    let local = tokio::task::LocalSet::new();
+    local
+        .run_until(async {
+            let (actor, _rx) = build_actor().await;
+            // A reasoning model truncated mid-thinking: no content text yet,
+            // but reasoning/thinking was produced. Commit the reasoning and
+            // auto-continue (extends the thinking budget across segments)
+            // rather than surfacing a terminal failure - the glm-5.2 case.
+            let partial = TruncationPartial {
+                content: None,
+                reasoning: Some("partial thinking that got cut off".into()),
+            };
+            let outcome = actor
+                .handle_sampling_failure(max_tokens_truncation_error(), partial)
+                .await;
+            assert!(
+                matches!(outcome, Ok(SamplerFailureRecovery::ContinueAfterTruncation)),
+                "reasoning-only truncation should auto-continue, got {outcome:?}"
             );
         })
         .await;

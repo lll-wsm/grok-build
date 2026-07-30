@@ -216,7 +216,7 @@ impl From<&SamplingError> for SamplingErrorInfo {
             SamplingError::EmptyResponse { .. } => {
                 (SamplingErrorKind::EmptyResponse, None, None, None)
             }
-            SamplingError::MaxTokensTruncation => {
+            SamplingError::MaxTokensTruncation { .. } => {
                 (SamplingErrorKind::MaxTokensTruncation, None, None, None)
             }
             SamplingError::DoomLoopDetected { .. } => {

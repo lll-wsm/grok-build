@@ -156,7 +156,7 @@ pub fn map_sampling_err_to_acp(err: SamplingError) -> acp::Error {
             context.had_reasoning,
             context.finish_reason_str(),
         )),
-        SamplingError::MaxTokensTruncation => {
+        SamplingError::MaxTokensTruncation { .. } => {
             acp::Error::internal_error().data(terminal_error_data(
                 err.to_string(),
                 None,
@@ -752,7 +752,10 @@ mod tests {
     /// The typed max-tokens kind round-trips through `acp::Error.data` to the uploaded stop_reason.
     #[test]
     fn stop_reason_for_turn_error_distinguishes_max_tokens() {
-        let err = map_sampling_err_to_acp(SamplingError::MaxTokensTruncation);
+        let err = map_sampling_err_to_acp(SamplingError::MaxTokensTruncation {
+            partial_content: None,
+            partial_reasoning: None,
+        });
         assert_eq!(stop_reason_for_turn_error(&err), "MaxTokens");
         assert_eq!(
             stop_reason_for_turn_error(&acp::Error::internal_error()),

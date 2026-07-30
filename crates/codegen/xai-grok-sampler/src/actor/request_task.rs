@@ -620,8 +620,32 @@ async fn drive_l2(
                         }
                     }
                     if response.stop_reason == Some(xai_grok_sampling_types::StopReason::Length) {
+                        // Preserve what the model produced before being cut off
+                        // so the shell can commit it and auto-continue instead of
+                        // treating the truncation as a terminal failure. Carry
+                        // BOTH the content and the reasoning/thinking text: a
+                        // reasoning model truncated mid-thinking has empty
+                        // content but non-empty reasoning, and committing the
+                        // reasoning lets it resume across continuation segments
+                        // (effectively extending the output budget). Empty
+                        // channel text yields `None` for that channel.
+                        let partial_content = {
+                            let text = response.assistant_text();
+                            if text.is_empty() { None } else { Some(text) }
+                        };
+                        let partial_reasoning = {
+                            let text = response
+                                .reasoning_items()
+                                .map(xai_grok_sampling_types::reasoning_item_text)
+                                .collect::<Vec<_>>()
+                                .join("\n");
+                            if text.is_empty() { None } else { Some(text) }
+                        };
                         return AttemptOutcome::Failed {
-                            error: SamplingError::MaxTokensTruncation,
+                            error: SamplingError::MaxTokensTruncation {
+                                partial_content,
+                                partial_reasoning,
+                            },
                         };
                     }
                     // A content-filtered turn (Anthropic refusal, OpenAI
@@ -723,7 +747,10 @@ fn synthesize_from_info(info: &SamplingErrorInfo) -> SamplingError {
                 SamplingError::EventStreamError(info.message.clone())
             }
         }
-        SamplingErrorKind::MaxTokensTruncation => SamplingError::MaxTokensTruncation,
+        SamplingErrorKind::MaxTokensTruncation => SamplingError::MaxTokensTruncation {
+            partial_content: None,
+            partial_reasoning: None,
+        },
         SamplingErrorKind::DoomLoopDetected => SamplingError::DoomLoopDetected {
             triggers: info.doom_loop_triggers.clone().unwrap_or_default(),
             aborted_at_chunk: info.doom_loop_aborted_at_chunk,

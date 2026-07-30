@@ -132,6 +132,7 @@ use session_mode::*;
 #[path = "acp_session_impl/sampler_turn.rs"]
 mod sampler_turn;
 use sampler_turn::*;
+pub(crate) use sampler_turn::TruncationPartial;
 #[path = "acp_session_impl/tool_dispatch.rs"]
 mod tool_dispatch;
 use tool_dispatch::*;
@@ -1008,6 +1009,13 @@ pub(crate) struct SessionActor {
     /// terminal `SamplingEvent::Completed` (every text/thought chunk has been
     /// `send_update`d by then). `None` between turns.
     pub(crate) turn_stream_drained: parking_lot::Mutex<Option<tokio::sync::oneshot::Sender<()>>>,
+    /// Consecutive `max_tokens` output-truncation auto-continues in the
+    /// current turn. Incremented each time `handle_sampling_failure`
+    /// salvages a truncated response into a `ContinueAfterTruncation`
+    /// recovery; reset to 0 on any non-truncated outcome (`Response`,
+    /// cap exhaustion, or any other recovery). Bounds runaway
+    /// continuation at `MAX_TRUNCATION_CONTINUES`.
+    pub(crate) truncation_continues: std::sync::atomic::AtomicU32,
     /// Handle to the per-session `xai-grok-sampler` actor.
     ///
     /// Live sessions get a real handle from `spawn_session_actor`;

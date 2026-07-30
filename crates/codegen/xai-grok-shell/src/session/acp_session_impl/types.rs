@@ -15,6 +15,7 @@ pub(crate) enum McpReminderMode {
 /// Recovery decision returned by
 /// `SessionActor::handle_sampling_failure` for the sampler-based
 /// turn loop.
+#[derive(Debug)]
 pub(crate) enum SamplerFailureRecovery {
     /// Compaction ran. The turn loop should rebuild the request from
     /// the compacted conversation and resubmit.
@@ -23,6 +24,15 @@ pub(crate) enum SamplerFailureRecovery {
     /// provider re-mint). The turn loop should resubmit once with the
     /// fresh token.
     RefreshAuthAndResubmit,
+    /// A single model response hit the `max_tokens` output cap
+    /// (`finish_reason: "length"`). The partial text the model already
+    /// produced has been committed to chat state and a synthetic
+    /// `auto_continue` user turn appended, so the turn loop should
+    /// rebuild the request from the latest chat state and resubmit --
+    /// the model resumes from where it was cut off. Bounded by
+    /// `MAX_TRUNCATION_CONTINUES`; once exhausted the failure falls
+    /// through to the normal terminal path.
+    ContinueAfterTruncation,
 }
 
 /// Outcome of a single turn attempt via the sampler-based path.
@@ -38,6 +48,10 @@ pub(crate) enum SamplerTurnOutcome {
     CompactAndResubmit,
     /// Auth recovery succeeded; the outer loop should retry once.
     RefreshAuthAndResubmit,
+    /// Output was truncated by `max_tokens`; the partial was committed and
+    /// a continue turn injected. The outer loop should `continue` to
+    /// resubmit (mirrors `CompactAndResubmit`).
+    ContinueAfterTruncation,
 }
 
 /// Outcome of `process_conversation_turn`, distinguishing normal completion from cancellation.

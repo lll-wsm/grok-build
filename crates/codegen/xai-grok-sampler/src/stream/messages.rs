@@ -452,7 +452,10 @@ pub fn stream_messages<'a>(
         if final_stop_reason == Some(StopReason::Length) {
             yield SamplingEvent::Failed {
                 request_id: request_id.clone(),
-                error: SamplingErrorInfo::from(&SamplingError::MaxTokensTruncation),
+                error: SamplingErrorInfo::from(&SamplingError::MaxTokensTruncation {
+                    partial_content: None,
+                    partial_reasoning: None,
+                }),
             };
             return;
         }
