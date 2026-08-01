@@ -8,6 +8,11 @@ use super::*;
 /// generating: realistic long outputs finish in 1-2 continues and never reach
 /// this. Reset on any non-truncated outcome.
 pub(crate) const MAX_TRUNCATION_CONTINUES: u32 = 8;
+/// Maximum number of consecutive 429 rate-limit retries within a single turn
+/// before we give up and surface a terminal failure. 429 retries do not
+/// consume tokens (the server rejects before inference), so this can be
+/// generous. Reset on any non-rate-limited outcome.
+pub(crate) const MAX_RATE_LIMIT_RETRIES: u32 = 5;
 /// Synthetic user-turn prompt injected after committing a truncated partial so
 /// the model resumes from where it was cut off. Tagged `auto_continue` (not a
 /// real user turn) via `ConversationItem::auto_continue`, so it is excluded
@@ -949,21 +954,54 @@ impl SessionActor {
             return Err(acp::Error::invalid_params().data(friendly));
         }
         if matches!(error.kind, SamplingErrorKind::RateLimited) {
-            self.log_terminal_failure("rate_limited", error.status_code, &detailed_message);
+            let count = self
+                .rate_limit_retries
+                .load(std::sync::atomic::Ordering::Relaxed);
+            if count >= MAX_RATE_LIMIT_RETRIES {
+                self.rate_limit_retries
+                    .store(0, std::sync::atomic::Ordering::Relaxed);
+                self.log_terminal_failure(
+                    "rate_limited_cap_exhausted",
+                    error.status_code,
+                    &detailed_message,
+                );
+                self.send_xai_notification(XaiSessionUpdate::RetryState(
+                    crate::extensions::notification::RetryState::Exhausted {
+                        attempts: count,
+                        reason: detailed_message.clone(),
+                        is_rate_limited: true,
+                    },
+                ))
+                .await;
+                let acp_err = acp::Error::new(
+                    crate::sampling::error::RATE_LIMITED_ERROR_CODE,
+                    "Rate limited".to_string(),
+                )
+                .data(detailed_message);
+                return Err(acp_err);
+            }
+            self.rate_limit_retries
+                .store(count + 1, std::sync::atomic::Ordering::Relaxed);
+            // Use the server's Retry-After if provided, else exponential
+            // backoff: 3s, 6s, 12s, 24s, 30s (capped).
+            let backoff_secs = error.retry_after_secs.unwrap_or_else(|| {
+                let base = 3u64 << count; // 3, 6, 12, 24, 48
+                base.min(30)
+            });
+            tracing::warn!(
+                retry_count = count + 1,
+                backoff_secs,
+                "rate limited (429): backing off before retry",
+            );
             self.send_xai_notification(XaiSessionUpdate::RetryState(
-                crate::extensions::notification::RetryState::Exhausted {
-                    attempts: 0,
-                    reason: detailed_message.clone(),
-                    is_rate_limited: true,
+                crate::extensions::notification::RetryState::Retrying {
+                    attempt: count + 1,
+                    max_retries: MAX_RATE_LIMIT_RETRIES,
+                    reason: "Rate limited (429); backing off before retry".to_string(),
                 },
             ))
             .await;
-            let acp_err = acp::Error::new(
-                crate::sampling::error::RATE_LIMITED_ERROR_CODE,
-                "Rate limited".to_string(),
-            )
-            .data(detailed_message);
-            return Err(acp_err);
+            return Ok(SamplerFailureRecovery::RetryAfterRateLimit { backoff_secs });
         }
         let (failed_model_id, failed_base_url) = self
             .chat_state_handle
@@ -1279,6 +1317,9 @@ impl SessionActor {
                 // A clean response breaks any truncation-continue streak.
                 self.truncation_continues
                     .store(0, std::sync::atomic::Ordering::Relaxed);
+                // A clean response also breaks any rate-limit-retry streak.
+                self.rate_limit_retries
+                    .store(0, std::sync::atomic::Ordering::Relaxed);
                 Ok(SamplerTurnOutcome::Response(
                     Box::new(response),
                     Box::new(metrics),
@@ -1309,6 +1350,9 @@ impl SessionActor {
                     }
                     SamplerFailureRecovery::ContinueAfterTruncation => {
                         Ok(SamplerTurnOutcome::ContinueAfterTruncation)
+                    }
+                    SamplerFailureRecovery::RetryAfterRateLimit { backoff_secs } => {
+                        Ok(SamplerTurnOutcome::RetryAfterRateLimit { backoff_secs })
                     }
                 }
             }

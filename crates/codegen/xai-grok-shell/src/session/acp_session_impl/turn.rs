@@ -2208,6 +2208,26 @@ impl SessionActor {
                     auth_retry_schedule.reset_on_success();
                     continue;
                 }
+                Ok(SamplerTurnOutcome::RetryAfterRateLimit { backoff_secs }) => {
+                    // Rate-limited (429): the server rejected the request
+                    // before inference (no tokens consumed). Wait the
+                    // computed backoff and resubmit. Bounded by
+                    // `MAX_RATE_LIMIT_RETRIES` in `handle_sampling_failure`.
+                    tracing::warn!(
+                        backoff_secs,
+                        "rate limited (429): sleeping before retry",
+                    );
+                    xai_grok_telemetry::unified_log::warn(
+                        "shell.turn.rate_limit_retry",
+                        Some(self.session_info.id.0.as_ref()),
+                        Some(serde_json::json!({
+                            "loop_index": loop_index,
+                            "backoff_secs": backoff_secs,
+                        })),
+                    );
+                    sleep(std::time::Duration::from_secs(backoff_secs)).await;
+                    continue;
+                }
                 Ok(SamplerTurnOutcome::RefreshAuthAndResubmit { credential, store }) => {
                     if auth_retry_schedule.reset_if_incident_spans_suspend() {
                         tracing::info!("auth 401 retry: incident spanned a suspend; budget reset");

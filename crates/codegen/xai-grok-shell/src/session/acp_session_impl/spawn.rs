@@ -1757,6 +1757,7 @@ pub(crate) async fn spawn_session_actor(
         streaming_turn_capture: parking_lot::Mutex::new(StreamingTurnCapture::default()),
         turn_stream_drained: parking_lot::Mutex::new(None),
         truncation_continues: std::sync::atomic::AtomicU32::new(0),
+        rate_limit_retries: std::sync::atomic::AtomicU32::new(0),
         sampler_handle,
         rebuild_spec: rebuild_spec.clone(),
         image_description_model,

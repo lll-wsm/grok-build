@@ -38,9 +38,12 @@ use std::time::Duration;
 use xai_grok_sampling_types::SamplingError;
 
 /// After this many rate-limit (429) retries, escalate to the caller
-/// instead of waiting again. Rate-limit waits can be long and there is
-/// no point burning a long backoff just to be rate-limited again.
-pub const RATE_LIMIT_RETRY_THRESHOLD: u32 = 2;
+/// instead of waiting again. The caller (turn loop) has its own
+/// `MAX_RATE_LIMIT_RETRIES` budget on top of this, so the combined
+/// retry budget is generous enough for transient rate limits on
+/// third-party APIs (e.g. GLM, DeepSeek) without burning excessive
+/// backoff time. 429 retries do not consume tokens.
+pub const RATE_LIMIT_RETRY_THRESHOLD: u32 = 4;
 
 /// Default max retries when no env or model override is set.
 /// With 30s backoff cap this gives ~6 min of retry budget:
@@ -622,8 +625,8 @@ mod tests {
     #[test]
     fn classify_rate_limited_capped_at_threshold() {
         let err = api_err(StatusCode::TOO_MANY_REQUESTS, "slow");
-        // retry_count=1, threshold=2 -> next_attempt=2 >= 2 -> Fatal.
-        match classify_error(&err, 1, 5, RATE_LIMIT_RETRY_THRESHOLD) {
+        // retry_count=3, threshold=4 -> next_attempt=4 >= 4 -> Fatal.
+        match classify_error(&err, 3, 5, RATE_LIMIT_RETRY_THRESHOLD) {
             RetryDecision::Fatal(SamplingError::Api { status, .. }) => {
                 assert_eq!(status, StatusCode::TOO_MANY_REQUESTS);
             }

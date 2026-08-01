@@ -245,6 +245,7 @@ pub(super) async fn make_replay_send_update_fixture() -> ReplaySendUpdateFixture
         streaming_turn_capture: parking_lot::Mutex::new(StreamingTurnCapture::default()),
         turn_stream_drained: parking_lot::Mutex::new(None),
             truncation_continues: std::sync::atomic::AtomicU32::new(0),
+                rate_limit_retries: std::sync::atomic::AtomicU32::new(0),
         sampler_handle: xai_grok_sampler::SamplerHandle::noop(),
         rebuild_spec: crate::session::agent_rebuild::test_rebuild_spec_default(),
         image_description_model: crate::test_support::TEST_MODEL.to_owned(),

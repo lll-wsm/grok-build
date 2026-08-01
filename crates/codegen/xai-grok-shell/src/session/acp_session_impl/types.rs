@@ -52,6 +52,10 @@ pub(crate) enum SamplerFailureRecovery {
     /// `MAX_TRUNCATION_CONTINUES`; once exhausted the failure falls
     /// through to the normal terminal path.
     ContinueAfterTruncation,
+    /// Rate-limited (429). The turn loop should sleep `backoff_secs`
+    /// and resubmit the same request. Bounded by `MAX_RATE_LIMIT_RETRIES`;
+    /// once exhausted the failure falls through to the terminal path.
+    RetryAfterRateLimit { backoff_secs: u64 },
 }
 
 /// Outcome of a single turn attempt via the sampler-based path.
@@ -75,6 +79,9 @@ pub(crate) enum SamplerTurnOutcome {
     /// a continue turn injected. The outer loop should `continue` to
     /// resubmit (mirrors `CompactAndResubmit`).
     ContinueAfterTruncation,
+    /// Rate-limited (429); wait `backoff_secs` and resubmit. Mirrors
+    /// [`SamplerFailureRecovery::RetryAfterRateLimit`].
+    RetryAfterRateLimit { backoff_secs: u64 },
 }
 
 /// Outcome of `process_conversation_turn`, distinguishing normal completion from cancellation.

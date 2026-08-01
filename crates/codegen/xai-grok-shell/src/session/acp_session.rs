@@ -1023,6 +1023,9 @@ pub(crate) struct SessionActor {
     /// cap exhaustion, or any other recovery). Bounds runaway
     /// continuation at `MAX_TRUNCATION_CONTINUES`.
     pub(crate) truncation_continues: std::sync::atomic::AtomicU32,
+    /// Consecutive 429 rate-limit retries within a single turn. Reset on any
+    /// non-rate-limited outcome. Bounded by `MAX_RATE_LIMIT_RETRIES`.
+    pub(crate) rate_limit_retries: std::sync::atomic::AtomicU32,
     /// Handle to the per-session `xai-grok-sampler` actor.
     ///
     /// Live sessions get a real handle from `spawn_session_actor`;
