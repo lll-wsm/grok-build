@@ -72,7 +72,8 @@ ensure_rust() {
   # 触发 rust-toolchain.toml 锁定版本的安装/同步,避免在编译阶段才卡住。
   if [[ -f rust-toolchain.toml ]]; then
     info "同步仓库锁定的工具链 (rust-toolchain.toml)..."
-    rustup show active-toolchain >/dev/null 2>&1 || true
+    info "如需下载/安装工具链,请耐心等待(可能需要几分钟)..."
+    rustup show active-toolchain 2>&1 || true
   fi
 }
 ensure_rust
@@ -133,6 +134,9 @@ if [[ ${#EXTRA_ARGS[@]} -gt 0 ]]; then
 fi
 
 info "开始编译: cargo ${CARGO_ARGS[*]}"
+if [[ "$PROFILE" == "release" ]]; then
+  info "release 全量编译可能需要 10-30 分钟,请耐心等待..."
+fi
 START=$(date +%s)
 cargo "${CARGO_ARGS[@]}"
 ELAPSED=$(( $(date +%s) - START ))
