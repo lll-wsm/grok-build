@@ -109,6 +109,7 @@ pub struct MockModelEntry {
     pub agent_type: Option<String>,
     pub api_backend: Option<String>,
     pub supports_backend_search: bool,
+    pub supports_image_input: bool,
     pub supports_reasoning_effort: bool,
     pub reasoning_effort: Option<String>,
     /// Each entry is a table carrying a `value` key, or a bare value string.
@@ -123,6 +124,7 @@ impl MockModelEntry {
             agent_type: None,
             api_backend: None,
             supports_backend_search: false,
+            supports_image_input: true,
             supports_reasoning_effort: false,
             reasoning_effort: None,
             reasoning_efforts: Vec::new(),
@@ -143,6 +145,11 @@ impl MockModelEntry {
 
     pub fn with_supports_backend_search(mut self, supports: bool) -> Self {
         self.supports_backend_search = supports;
+        self
+    }
+
+    pub fn with_supports_image_input(mut self, supports: bool) -> Self {
+        self.supports_image_input = supports;
         self
     }
 
@@ -176,6 +183,9 @@ impl MockModelEntry {
         }
         if self.supports_backend_search {
             obj["supportsBackendSearch"] = json!(true);
+        }
+        if self.supports_image_input {
+            obj["supportsImageInput"] = json!(true);
         }
         if self.supports_reasoning_effort {
             obj["supportsReasoningEffort"] = json!(true);

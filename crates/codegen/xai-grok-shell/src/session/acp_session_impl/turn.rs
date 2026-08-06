@@ -707,6 +707,23 @@ impl SessionActor {
         self.inject_workflow_status_reminder().await;
         let user_message = if user_images.is_empty() {
             user_message
+        } else if !self.supports_image_input.get() {
+            // Main model does not support image input.
+            // If a vision-capable image_description model is configured,
+            // route through it for description; otherwise skip the images.
+            let has_describe_model = self
+                .resolve_aux_sampler_config(&self.image_description_model)
+                .await
+                .is_some();
+            if has_describe_model {
+                self.transcribe_user_images(user_message, &user_images)
+                    .await?
+            } else {
+                format!(
+                    "{user_message}\n\n[{} image(s) skipped - current model does not support image input]",
+                    user_images.len()
+                )
+            }
         } else if self.is_cursor_harness() {
             self.transcribe_user_images(user_message, &user_images)
                 .await?
@@ -726,7 +743,7 @@ impl SessionActor {
                     .data(format!("failed to save user images to assets dir: {e}"))
             })?
         };
-        let attached_image_refs = if self.is_cursor_harness() {
+        let attached_image_refs = if self.is_cursor_harness() || !self.supports_image_input.get() {
             Vec::new()
         } else {
             crate::session::placeholder_images::attached_image_references(&user_images)

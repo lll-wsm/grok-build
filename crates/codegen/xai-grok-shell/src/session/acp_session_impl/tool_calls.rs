@@ -2418,7 +2418,7 @@ impl SessionActor {
             tool_layer_images,
         );
         let mut prompt_text = maybe_rewrite(path_rewriter.as_ref(), extraction.text);
-        if !self.is_cursor_harness()
+        if !self.is_cursor_harness() && self.supports_image_input.get()
             && let ToolsToolOutput::ReadFile(ReadFileOutput::ImageContent(ref image_content)) =
                 result.output
         {
@@ -2450,8 +2450,19 @@ impl SessionActor {
                     prompt_text = format!("Read image file: {path}");
                 }
             }
+        } else if !self.supports_image_input.get()
+            && let ToolsToolOutput::ReadFile(ReadFileOutput::ImageContent(_)) = &result.output
+        {
+            let path = tool_parsed_args
+                .get("target_file")
+                .or_else(|| tool_parsed_args.get("path"))
+                .and_then(|v| v.as_str())
+                .unwrap_or("unknown");
+            prompt_text = format!(
+                "[Image file {path} skipped - current model does not support image input]"
+            );
         }
-        if !self.is_cursor_harness()
+        if !self.is_cursor_harness() && self.supports_image_input.get()
             && let ToolsToolOutput::ReadFile(ReadFileOutput::PdfPageImages(ref pdf)) = result.output
         {
             for page in &pdf.pages {

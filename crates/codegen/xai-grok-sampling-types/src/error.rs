@@ -326,7 +326,9 @@ impl SamplingError {
                 status,
                 message,
                 ..
-            } if matches!(status.as_u16(), 400 | 500) && message.contains("Could not process image")
+            } if matches!(status.as_u16(), 400 | 500)
+                && (message.contains("Could not process image")
+                    || message.contains("only support text"))
         )
     }
 
@@ -1212,6 +1214,31 @@ mod tests {
         let err = SamplingError::Api {
             status: StatusCode::INTERNAL_SERVER_ERROR,
             message: "upstream error: 400 Bad Request: Could not process image".into(),
+            model_metadata: None,
+            retry_after_secs: None,
+            should_retry: None,
+        };
+        assert!(err.is_image_processing_error());
+    }
+
+    #[test]
+    fn image_processing_error_text_only_model_400_detected() {
+        let err = SamplingError::Api {
+            status: StatusCode::BAD_REQUEST,
+            message: "BadRequest: Model only support text input".into(),
+            model_metadata: None,
+            retry_after_secs: None,
+            should_retry: None,
+        };
+        assert!(err.is_image_processing_error());
+        assert!(!err.is_encrypted_content_error());
+    }
+
+    #[test]
+    fn image_processing_error_text_only_model_500_wrapped() {
+        let err = SamplingError::Api {
+            status: StatusCode::INTERNAL_SERVER_ERROR,
+            message: "upstream error: 400 Bad Request: Model only support text input".into(),
             model_metadata: None,
             retry_after_secs: None,
             should_retry: None,

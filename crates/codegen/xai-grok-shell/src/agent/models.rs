@@ -511,6 +511,16 @@ impl ModelsManager {
             .unwrap_or(false)
     }
 
+    pub(crate) fn model_supports_image_input(&self, model_id: &str) -> bool {
+        self.inner
+            .catalog
+            .read()
+            .models
+            .get(model_id)
+            .map(|e| e.info().supports_image_input)
+            .unwrap_or(true)
+    }
+
     pub(crate) fn model_compactions_remaining(
         &self,
         model_id: &str,

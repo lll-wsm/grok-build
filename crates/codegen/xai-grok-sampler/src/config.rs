@@ -111,6 +111,11 @@ pub struct SamplerConfig {
     #[serde(default)]
     pub supports_backend_search: bool,
 
+    /// Whether the model accepts image inputs. Defaults to `true` for
+    /// backwards compatibility (most catalogued models support images).
+    #[serde(default = "default_true")]
+    pub supports_image_input: bool,
+
     /// Per-model config for the `x-compactions-remaining` header; `None` disables it.
     #[serde(default)]
     pub compactions_remaining: Option<CompactionsRemaining>,
@@ -163,6 +168,7 @@ impl Default for SamplerConfig {
             attribution_callback: None,
             bearer_resolver: None,
             supports_backend_search: false,
+            supports_image_input: true,
             compactions_remaining: None,
             compaction_at_tokens: None,
             doom_loop_recovery: None,
@@ -184,6 +190,10 @@ pub trait HeaderInjector: Send + Sync + std::fmt::Debug {
 }
 
 pub type SharedHeaderInjector = std::sync::Arc<dyn HeaderInjector>;
+
+fn default_true() -> bool {
+    true
+}
 
 /// Retry knobs for the sampler's internal transport-error retry loop.
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -641,7 +641,7 @@ impl ConversationRequest {
                     for part in &mut user.content {
                         if matches!(part, ContentPart::Image { .. }) {
                             *part = ContentPart::Text {
-                                text: Arc::<str>::from("[image removed — conversation too large]"),
+                                text: Arc::<str>::from("[image content removed]"),
                             };
                             stripped += 1;
                         }
@@ -4470,7 +4470,7 @@ mod tests {
         if let ConversationItem::User(user) = &req.items[0] {
             assert_eq!(user.content.len(), 2); // original text + replaced image
             assert_matches!(&user.content[1], ContentPart::Text { text } => {
-                assert!(text.contains("image removed"));
+                assert!(text.contains("image content removed"));
             });
         } else {
             panic!("Expected User item");
@@ -4545,7 +4545,7 @@ mod tests {
             });
             // Image part replaced
             assert_matches!(&user.content[1], ContentPart::Text { text } => {
-                assert!(text.contains("image removed"));
+                assert!(text.contains("image content removed"));
             });
         } else {
             panic!("Expected User item");

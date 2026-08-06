@@ -937,6 +937,12 @@ pub(crate) fn parse_remote_model_value(
             .or_else(|| meta.and_then(|m| m.get("supportsBackendSearch")))
             .and_then(|v| v.as_bool())
             .unwrap_or(false),
+        supports_image_input: obj
+            .get("supportsImageInput")
+            .or_else(|| obj.get("supports_image_input"))
+            .or_else(|| meta.and_then(|m| m.get("supportsImageInput")))
+            .and_then(|v| v.as_bool())
+            .unwrap_or(true),
         compactions_remaining: obj
             .get("compactionsRemaining")
             .or_else(|| obj.get("compactions_remaining"))

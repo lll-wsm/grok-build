@@ -3745,6 +3745,8 @@ struct DefaultModelJson {
     supported_in_api: bool,
     #[serde(default)]
     supports_backend_search: bool,
+    #[serde(default = "default_true")]
+    supports_image_input: bool,
     #[serde(default)]
     compactions_remaining: Option<CompactionsRemaining>,
     #[serde(default)]
@@ -3809,6 +3811,7 @@ fn default_models(endpoints: &EndpointsConfig) -> IndexMap<String, ModelEntryCon
                 supports_reasoning_effort: m.supports_reasoning_effort,
                 reasoning_efforts: m.reasoning_efforts,
                 supports_backend_search: m.supports_backend_search,
+                supports_image_input: m.supports_image_input,
                 compactions_remaining: m.compactions_remaining,
                 compaction_at_tokens: m.compaction_at_tokens,
                 show_model_fingerprint: m.show_model_fingerprint,
@@ -3916,6 +3919,13 @@ pub struct ModelEntryConfig {
     pub supported_in_api: bool,
     #[serde(default, skip_serializing_if = "is_false")]
     pub supports_backend_search: bool,
+    /// Whether this model supports image (multimodal) input.
+    /// When false, user images are routed through the image-description
+    /// pipeline (if `image_description` model is configured) or skipped
+    /// with a text placeholder. Defaults to true (Grok models support images).
+    /// Set to false for text-only models (GLM, DeepSeek, etc.).
+    #[serde(default = "default_true")]
+    pub supports_image_input: bool,
     /// Per-model config for the `x-compactions-remaining` header; `None` disables it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub compactions_remaining: Option<CompactionsRemaining>,
@@ -3997,6 +4007,7 @@ pub struct ConfigModelOverride {
     pub supports_reasoning_effort: Option<bool>,
     pub reasoning_efforts: Vec<ReasoningEffortOption>,
     pub supports_backend_search: Option<bool>,
+    pub supports_image_input: Option<bool>,
     /// Aliases must be registered in `config_model_override_parse::ALIASES`;
     /// serde rejects a table that contains both spellings otherwise.
     #[serde(alias = "send_compactions_remaining")]
@@ -4085,6 +4096,9 @@ impl ConfigModelOverride {
         }
         if let Some(v) = self.supports_backend_search {
             entry.info.supports_backend_search = v;
+        }
+        if let Some(v) = self.supports_image_input {
+            entry.info.supports_image_input = v;
         }
         if self.compactions_remaining.is_some() {
             entry.info.compactions_remaining = self.compactions_remaining;
@@ -4178,6 +4192,8 @@ pub struct ModelInfo {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub reasoning_efforts: Vec<ReasoningEffortOption>,
     pub supports_backend_search: bool,
+    /// Whether this model supports image (multimodal) input.
+    pub supports_image_input: bool,
     /// Per-model config for the `x-compactions-remaining` header; `None` disables it.
     pub compactions_remaining: Option<CompactionsRemaining>,
     /// Per-model config for the `x-compaction-at` header; `None` disables it.
@@ -4224,6 +4240,7 @@ impl ModelInfo {
             supports_reasoning_effort: false,
             reasoning_efforts: Vec::new(),
             supports_backend_search: false,
+                supports_image_input: true,
             compactions_remaining: None,
             compaction_at_tokens: None,
             show_model_fingerprint: false,
@@ -4261,6 +4278,7 @@ impl ModelInfo {
             supports_reasoning_effort: entry.supports_reasoning_effort,
             reasoning_efforts: entry.reasoning_efforts.clone(),
             supports_backend_search: entry.supports_backend_search,
+                supports_image_input: entry.supports_image_input,
             compactions_remaining: entry.compactions_remaining,
             compaction_at_tokens: entry.compaction_at_tokens,
             show_model_fingerprint: entry.show_model_fingerprint,
@@ -5017,6 +5035,7 @@ pub(crate) fn resolve_aux_model_sampling_config(
                 supports_reasoning_effort: false,
                 reasoning_efforts: Vec::new(),
                 supports_backend_search: false,
+                supports_image_input: true,
                 compactions_remaining: None,
                 compaction_at_tokens: None,
                 show_model_fingerprint: false,
@@ -5155,6 +5174,7 @@ pub(crate) fn sampling_config_for_model(
         attribution_callback: None,
         bearer_resolver: None,
         supports_backend_search: info.supports_backend_search,
+                supports_image_input: info.supports_image_input,
         compactions_remaining: info.compactions_remaining,
         compaction_at_tokens: info.compaction_at_tokens,
         doom_loop_recovery: None,
@@ -5230,6 +5250,7 @@ fn resolve_hidden_default_web_search_sampling_config(
             supports_reasoning_effort: false,
             reasoning_efforts: Vec::new(),
             supports_backend_search: false,
+                supports_image_input: true,
             compactions_remaining: None,
             compaction_at_tokens: None,
             show_model_fingerprint: false,
@@ -6447,6 +6468,7 @@ reasoning_effort = "low"
                 supports_reasoning_effort: false,
                 reasoning_efforts: Vec::new(),
                 supports_backend_search: false,
+                supports_image_input: true,
                 compactions_remaining: None,
                 compaction_at_tokens: None,
                 show_model_fingerprint: false,
@@ -7472,6 +7494,7 @@ reasoning_effort = "low"
             supports_reasoning_effort: false,
             reasoning_efforts: Vec::new(),
             supports_backend_search: false,
+                supports_image_input: true,
             compactions_remaining: None,
             compaction_at_tokens: None,
             show_model_fingerprint: false,
@@ -7631,6 +7654,7 @@ reasoning_effort = "low"
             supports_reasoning_effort: false,
             reasoning_efforts: Vec::new(),
             supports_backend_search: false,
+                supports_image_input: true,
             compactions_remaining: None,
             compaction_at_tokens: None,
             show_model_fingerprint: false,
@@ -8082,6 +8106,7 @@ reasoning_effort = "low"
             supports_reasoning_effort: false,
             reasoning_efforts: Vec::new(),
             supports_backend_search: false,
+                supports_image_input: true,
             compactions_remaining: None,
             compaction_at_tokens: None,
             show_model_fingerprint: false,
@@ -11931,6 +11956,7 @@ default = "grok-4.5"
                 supports_reasoning_effort: false,
                 reasoning_efforts: Vec::new(),
                 supports_backend_search: false,
+                supports_image_input: true,
                 compactions_remaining: None,
                 compaction_at_tokens: None,
                 show_model_fingerprint: false,

@@ -32,6 +32,8 @@ impl SessionActor {
             .set(auto_compact_threshold_percent);
         self.supports_backend_search
             .set(sampling_config.supports_backend_search);
+        self.supports_image_input
+            .set(sampling_config.supports_image_input);
         self.compactions_remaining
             .set(sampling_config.compactions_remaining);
         self.compaction_at_tokens
@@ -43,6 +45,7 @@ impl SessionActor {
                 "new_model": &sampling_config.model,
                 "api_backend": format!("{:?}", sampling_config.api_backend),
                 "supports_backend_search": sampling_config.supports_backend_search,
+                "supports_image_input": sampling_config.supports_image_input,
             })),
         );
         self.chat_state_handle
