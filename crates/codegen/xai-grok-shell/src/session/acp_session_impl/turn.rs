@@ -711,11 +711,11 @@ impl SessionActor {
             // Main model does not support image input.
             // If a vision-capable image_description model is configured,
             // route through it for description; otherwise skip the images.
-            let has_describe_model = self
+            let has_vision_model = self
                 .resolve_aux_sampler_config(&self.image_description_model)
                 .await
-                .is_some();
-            if has_describe_model {
+                .is_some_and(|cfg| cfg.supports_image_input);
+            if has_vision_model {
                 self.transcribe_user_images(user_message, &user_images)
                     .await?
             } else {
