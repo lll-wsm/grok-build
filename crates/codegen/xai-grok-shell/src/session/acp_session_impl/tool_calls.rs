@@ -702,10 +702,11 @@ impl SessionActor {
                         .clone()
                         .or_else(|| prepared.dispatch_target_name.clone())
                         .unwrap_or_else(|| prepared.tool_name.clone());
+                    let drained = DrainedToolSuccess::new(tool_result);
                     post_tool_use_result = self
                         .hook_event_active(xai_grok_hooks::event::HookEventName::PostToolUse)
                         .then(|| {
-                            serde_json::to_value(&tool_result.output)
+                            serde_json::to_value(drained.output())
                                 .unwrap_or(serde_json::Value::Null)
                         });
                     let followups = self
@@ -714,7 +715,7 @@ impl SessionActor {
                             &prepared.call_id,
                             &prepared.tool_name,
                             &effective_tool_name,
-                            tool_result,
+                            drained,
                             prepared.concatenated_json_count,
                             &prepared.model_id,
                             &prepared.parsed_args,
@@ -1688,24 +1689,14 @@ impl SessionActor {
         let prompt_id = format!("plan-resume-{}", chrono::Utc::now().timestamp_millis());
         let prompt_blocks = vec![acp::ContentBlock::Text(acp::TextContent::new(text))];
         let (respond_to, _rx) = oneshot::channel();
-        self.queue_input(
-            prompt_blocks,
-            prompt_id,
-            mode,
-            None,
-            None,
-            None,
-            None,
-            false,
-            None,
-            false,
-            None,
-            None,
-            respond_to,
-            None,
-            None,
-        )
-        .await;
+        let _ = self
+            .queue_input(QueueInputRequest::new(
+                prompt_blocks,
+                prompt_id,
+                mode,
+                respond_to,
+            ))
+            .await;
         SessionActor::maybe_start_running_task(self.clone(), completion_tx).await;
     }
     /// Refine the initial (minimal) ToolCall that was registered during
@@ -2304,12 +2295,13 @@ impl SessionActor {
         call_id: &str,
         requested_tool_name: &str,
         effective_tool_name: &str,
-        result: ToolRunResult,
+        drained: DrainedToolSuccess,
         concatenated_json_count: usize,
         model_id: &str,
         tool_parsed_args: &serde_json::Value,
     ) -> Result<Vec<ConversationItem>, acp::Error> {
         use crate::session::acp_conversion::{acp_plan_update, acp_tool_update, maybe_rewrite};
+        let (mut result, mut tool_layer_images) = drained.into_parts();
         let consumed_ids =
             xai_grok_tools::reminders::task_completion::consumed_completion_ids(&result.output);
         if !consumed_ids.is_empty() {
@@ -2338,6 +2330,7 @@ impl SessionActor {
             let state = self.mcp_state.lock().await;
             state.mcp_tool_meta.get(effective_tool_name).cloned()
         };
+        tool_layer_images.extend(drain_tool_layer_extracted_images(&mut result.output));
         if let Some(mut tool_update) =
             acp_tool_update(&result.output, call_id, path_rewriter.as_ref(), tool_meta)
         {
@@ -2419,13 +2412,12 @@ impl SessionActor {
             }
         };
         let mut extracted_images = extraction.images;
-        let prompt_text = extraction.text;
-        if !self.is_cursor_harness()
-            && let ToolsToolOutput::ReadFile(ReadFileOutput::FileContent(ref fc)) = result.output
-        {
-            extracted_images.extend(fc.extracted_images.iter().cloned());
-        }
-        let mut prompt_text = maybe_rewrite(path_rewriter.as_ref(), prompt_text);
+        split_tool_layer_for_harness(
+            self.is_cursor_harness(),
+            &mut extracted_images,
+            tool_layer_images,
+        );
+        let mut prompt_text = maybe_rewrite(path_rewriter.as_ref(), extraction.text);
         if !self.is_cursor_harness()
             && let ToolsToolOutput::ReadFile(ReadFileOutput::ImageContent(ref image_content)) =
                 result.output

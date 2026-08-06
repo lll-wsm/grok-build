@@ -348,7 +348,8 @@ impl VoiceState {
         matches!(self, Self::ColdStart { hold, .. } | Self::Recording { hold, .. } if *hold)
     }
 }
-/// Entry in the session picker list on the welcome screen.
+/// Entry from the session list wire: welcome/resume pickers and non-leader
+/// dashboard roster fallback (`session_picker_entry_to_roster`).
 #[derive(Debug, Clone)]
 pub struct SessionPickerEntry {
     pub id: String,
@@ -368,6 +369,9 @@ pub struct SessionPickerEntry {
     pub repo_name: String,
     /// Human-readable worktree label (if the session was created in a named worktree).
     pub worktree_label: Option<String>,
+    /// Per-turn secondary line (`lastTurnSummary` on the session/list wire).
+    /// Used for non-leader roster rows today; reserved for picker display later.
+    pub last_turn_summary: Option<String>,
     /// Lazy-loaded detail for the expanded card view.
     pub card_detail: Option<CardDetail>,
 }
@@ -1025,6 +1029,11 @@ pub struct AppView {
     pub fork_worktree_mode: WorktreeMode,
     /// Restore code state on resume (`--restore-code`).
     pub restore_code: Option<bool>,
+    /// One-shot session id: matching `LoadSession` / worktree resume injects
+    /// `restore_code: false`, then this clears. Used after conversation-only
+    /// remote restore (and remote worktree without `--restore-code`) so agent
+    /// `[cli] restore_code` cannot checkout in-place. Not sticky.
+    pub suppress_code_restore_once: Option<String>,
     /// Startup resume target that missed local id/title resolution and was
     /// deferred to the worktree resume handler (set from materialization).
     /// Worktree failure messages append the no-match hint only for this
@@ -1523,6 +1532,7 @@ impl AppView {
             new_session_worktree_mode: WorktreeMode::Never,
             fork_worktree_mode: WorktreeMode::Ask,
             restore_code: None,
+            suppress_code_restore_once: None,
             resume_local_miss: None,
             agent_override: None,
             bootstrap_acp_commands,
@@ -4703,6 +4713,7 @@ impl AppView {
                             } else {
                                 None
                             };
+                        let overlay_can_cycle = position.is_some_and(|(_, n)| n > 1);
                         let (agent_area, header) = if overlay_active {
                             let theme = crate::theme::Theme::current();
                             let title = agents
@@ -4792,6 +4803,7 @@ impl AppView {
                                 },
                                 &self.bundle_state,
                                 overlay_active,
+                                overlay_can_cycle,
                                 link_spans,
                                 AppRenderParams {
                                     voice_available,
@@ -4911,6 +4923,7 @@ impl AppView {
                                                     crate::app::agent_view::BannerSlotParams::none(
                                                     ),
                                                     bundle_state,
+                                                    false,
                                                     false,
                                                     link_spans,
                                                     AppRenderParams {
@@ -5954,6 +5967,7 @@ pub(crate) mod tests {
             new_session_worktree_mode: WorktreeMode::Never,
             fork_worktree_mode: WorktreeMode::Ask,
             restore_code: None,
+            suppress_code_restore_once: None,
             resume_local_miss: None,
             agent_override: None,
             bootstrap_acp_commands: Vec::new(),
@@ -6548,6 +6562,7 @@ pub(crate) mod tests {
             branch: None,
             repo_name: "r".into(),
             worktree_label: None,
+            last_turn_summary: None,
             card_detail: None,
         };
         if let Some(crate::views::modal::ActiveModal::SessionPicker { entries, .. }) =
@@ -7874,6 +7889,7 @@ pub(crate) mod tests {
             branch: None,
             repo_name: "tmp-repo".into(),
             worktree_label: None,
+            last_turn_summary: None,
             card_detail: None,
         }
     }
@@ -9828,6 +9844,7 @@ pub(crate) mod tests {
             crate::app::agent_view::BannerSlotParams::none(),
             &BundleState::default(),
             false,
+            false,
             &mut Vec::new(),
             crate::app::agent_view::AppRenderParams::default(),
         );
@@ -9873,6 +9890,7 @@ pub(crate) mod tests {
             false,
             crate::app::agent_view::BannerSlotParams::none(),
             &BundleState::default(),
+            false,
             false,
             &mut Vec::new(),
             crate::app::agent_view::AppRenderParams::default(),
@@ -9923,6 +9941,7 @@ pub(crate) mod tests {
             false,
             crate::app::agent_view::BannerSlotParams::none(),
             &BundleState::default(),
+            false,
             false,
             &mut Vec::new(),
             crate::app::agent_view::AppRenderParams::default(),
@@ -11923,6 +11942,7 @@ pub(crate) mod tests {
             branch: None,
             repo_name: "r".into(),
             worktree_label: None,
+            last_turn_summary: None,
             card_detail: None,
         };
         let f_key = Event::Key(KeyEvent::new(KeyCode::Char('f'), KeyModifiers::NONE));
