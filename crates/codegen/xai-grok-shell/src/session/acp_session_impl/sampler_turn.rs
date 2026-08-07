@@ -1006,6 +1006,33 @@ impl SessionActor {
             .await;
             return Err(acp::Error::invalid_params().data(friendly));
         }
+        // Quota / balance exhaustion: many third-party platforms (DeepSeek,
+        // GLM, OpenAI-compatible gateways) return HTTP 429 when the account's
+        // quota or balance is depleted. Unlike a transient rate limit, the
+        // quota will not be replenished for hours, so retrying is pointless.
+        // Detect by message body and terminate immediately.
+        if xai_grok_sampling_types::message_looks_quota_exhausted(&error.message) {
+            self.rate_limit_retries
+                .store(0, std::sync::atomic::Ordering::Relaxed);
+            self.log_terminal_failure(
+                "quota_exhausted",
+                error.status_code,
+                &detailed_message,
+            );
+            self.send_xai_notification(XaiSessionUpdate::RetryState(
+                crate::extensions::notification::RetryState::Failed {
+                    error_type: "quota_exhausted".to_string(),
+                    message: detailed_message.clone(),
+                },
+            ))
+            .await;
+            let acp_err = acp::Error::new(
+                crate::sampling::error::RATE_LIMITED_ERROR_CODE,
+                "Quota exhausted".to_string(),
+            )
+            .data(detailed_message);
+            return Err(acp_err);
+        }
         if matches!(error.kind, SamplingErrorKind::RateLimited) {
             let count = self
                 .rate_limit_retries

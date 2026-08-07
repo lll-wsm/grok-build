@@ -383,6 +383,22 @@ impl SamplingError {
         }
     }
 
+    /// True when the error message indicates quota / balance / credit
+    /// exhaustion rather than a transient rate limit. Many third-party
+    /// platforms (DeepSeek, GLM, OpenAI-compatible gateways) return HTTP
+    /// 429 for both transient rate limits *and* depleted account quotas.
+    /// Unlike transient rate limits, quota exhaustion does not clear on
+    /// retry - the user must top up their balance or wait for the quota
+    /// window to reset (often hours). Callers must treat these as terminal.
+    pub fn is_quota_exhausted(&self) -> bool {
+        match self {
+            SamplingError::Api { message, .. } | SamplingError::StreamError { message, .. } => {
+                message_looks_quota_exhausted(message)
+            }
+            _ => false,
+        }
+    }
+
     /// Capacity / overload: HTTP 529, a 5xx whose message clearly says
     /// overloaded (proxies wrap stream overloads in a 500), or a stream
     /// error whose parsed `error_type` is a capacity type (`overloaded_error`
@@ -416,7 +432,9 @@ impl SamplingError {
     /// - Context-length overflow — deterministic; re-sending the same
     ///   payload always fails.
     pub fn is_retry_vetoed(&self) -> bool {
-        self.should_retry_header() == Some(false) || self.is_context_length_error()
+        self.should_retry_header() == Some(false)
+            || self.is_context_length_error()
+            || self.is_quota_exhausted()
     }
 }
 
@@ -618,6 +636,38 @@ fn message_looks_overloaded(message: &str) -> bool {
     m.contains("overloaded") || m.contains("service_unavailable_error")
 }
 
+/// Detect quota / balance / credit-exhaustion indicators in an error message.
+///
+/// Many third-party platforms return HTTP 429 when the account's quota or
+/// balance is depleted, making it indistinguishable from a transient rate
+/// limit by status code alone. Unlike transient rate limits, these do not
+/// clear on retry. The patterns below cover the major providers:
+///
+/// - OpenAI-compatible: `insufficient_quota`, `exceeded your current quota`
+/// - DeepSeek: `Insufficient Balance`
+/// - Anthropic: `credit_balance_too_low`
+/// - Google Gemini: `RESOURCE_EXHAUSTED`
+/// - Chinese platforms (GLM/Zhipu etc.): `余额不足`, `额度不足`, `额度已用尽`
+///
+/// Deliberately does **not** match bare `quota` or `exceeded` (which appear
+/// in transient "rate limit exceeded" messages) or bare `balance`.
+pub fn message_looks_quota_exhausted(message: &str) -> bool {
+    let m = message.to_ascii_lowercase();
+    m.contains("insufficient_quota")
+        || m.contains("insufficient balance")
+        || m.contains("insufficient quota")
+        || m.contains("exceeded your current quota")
+        || m.contains("quota exceeded")
+        || m.contains("quota_exceeded")
+        || m.contains("quota exhausted")
+        || m.contains("quota_exhausted")
+        || m.contains("credit_balance_too_low")
+        || m.contains("resource_exhausted")
+        || m.contains("余额不足")
+        || m.contains("额度不足")
+        || m.contains("额度已用尽")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -740,7 +790,7 @@ mod tests {
     }
 
     #[test]
-    fn retry_veto_covers_header_and_context_length() {
+    fn retry_veto_covers_header_context_length_and_quota() {
         let vetoed_by_header = SamplingError::Api {
             status: StatusCode::from_u16(529).unwrap(),
             message: "capacity".into(),
@@ -759,6 +809,15 @@ mod tests {
         };
         assert!(vetoed_by_context.is_retry_vetoed());
 
+        let vetoed_by_quota = SamplingError::Api {
+            status: StatusCode::TOO_MANY_REQUESTS,
+            message: "Insufficient Balance".into(),
+            model_metadata: None,
+            retry_after_secs: None,
+            should_retry: None,
+        };
+        assert!(vetoed_by_quota.is_retry_vetoed());
+
         let not_vetoed = SamplingError::Api {
             status: StatusCode::from_u16(529).unwrap(),
             message: "capacity".into(),
@@ -767,6 +826,63 @@ mod tests {
             should_retry: None,
         };
         assert!(!not_vetoed.is_retry_vetoed());
+    }
+
+    #[test]
+    fn quota_exhausted_matches_provider_variants() {
+        // Messages that should be detected as quota exhaustion.
+        for msg in [
+            "Insufficient Balance",
+            "insufficient_quota",
+            "You exceeded your current quota, please check your plan and billing details.",
+            "quota exceeded",
+            "quota_exceeded",
+            "quota exhausted",
+            "credit_balance_too_low",
+            "RESOURCE_EXHAUSTED",
+            "API error (status 429): Insufficient Balance",
+            "余额不足",
+            "额度不足",
+            "额度已用尽",
+        ] {
+            assert!(
+                message_looks_quota_exhausted(msg),
+                "should match as quota exhausted: {msg}"
+            );
+        }
+        // Transient rate-limit messages that must NOT be mistaken for quota.
+        for msg in [
+            "rate limit exceeded",
+            "rate_limit_error: rate limit exceeded",
+            "Rate limit reached. Please retry after 30s.",
+            "Too many requests",
+            "rate_limit_error",
+            "slow down",
+            "internal server error",
+            "connection reset",
+        ] {
+            assert!(
+                !message_looks_quota_exhausted(msg),
+                "should NOT match as quota exhausted: {msg}"
+            );
+        }
+        // The method delegates for Api/StreamError variants.
+        let api = SamplingError::Api {
+            status: StatusCode::TOO_MANY_REQUESTS,
+            message: "Insufficient Balance".into(),
+            model_metadata: None,
+            retry_after_secs: None,
+            should_retry: None,
+        };
+        assert!(api.is_quota_exhausted());
+        assert!(
+            SamplingError::StreamError {
+                error_type: "rate_limit_error".into(),
+                message: "insufficient_quota".into(),
+            }
+            .is_quota_exhausted()
+        );
+        assert!(!SamplingError::auth_unknown("nope").is_quota_exhausted());
     }
 
     #[test]

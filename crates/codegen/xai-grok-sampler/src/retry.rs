@@ -30,6 +30,9 @@
 //! - `IdleTimeout` (model stuck, retry would stall again)
 //! - `Serialization` (response parsing failure)
 //! - `MaxTokensTruncation` (by design)
+//! - Quota / balance exhaustion (429 whose message indicates depleted
+//!   account quota, e.g. "Insufficient Balance", "insufficient_quota")
+//!   - the quota won't clear on retry; detected via `is_retry_vetoed`
 //!
 //! **Server hint** (`x-should-retry` header from CCP):
 //! - `false` → Fatal immediately, regardless of status code
@@ -983,5 +986,34 @@ mod tests {
             classify_error(&err, 0, 15, RATE_LIMIT_RETRY_THRESHOLD),
             RetryDecision::Fatal(_)
         ));
+    }
+
+    #[test]
+    fn quota_exhausted_429_is_fatal() {
+        // Quota / balance exhaustion looks like a 429 by status code, but
+        // the message indicates the account's quota is depleted (not a
+        // transient rate limit). It must be Fatal - retrying won't help.
+        for msg in [
+            "Insufficient Balance",
+            "insufficient_quota",
+            "You exceeded your current quota",
+            "quota exceeded",
+            "余额不足",
+        ] {
+            let err = SamplingError::Api {
+                status: StatusCode::TOO_MANY_REQUESTS,
+                message: msg.into(),
+                model_metadata: None,
+                retry_after_secs: Some(60),
+                should_retry: None,
+            };
+            assert!(
+                matches!(
+                    classify_error(&err, 0, 15, RATE_LIMIT_RETRY_THRESHOLD),
+                    RetryDecision::Fatal(_)
+                ),
+                "quota-exhausted 429 should be Fatal, not retried: {msg}"
+            );
+        }
     }
 }
