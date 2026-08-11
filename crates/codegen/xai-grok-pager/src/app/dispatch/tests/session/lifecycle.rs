@@ -1359,6 +1359,11 @@ fn chat_mode_new_session_creates_with_chat_kind() {
         )),
         "expected chat CreateSession under --chat, got {effects:?}"
     );
+    let agent = app.agents.values().next().expect("agent");
+    assert!(
+        agent.conversation_entry,
+        "sticky --chat NewSession must stamp conversation_entry for rename kind"
+    );
 }
 /// Atomicity: when several startup intents coexist (e.g. CLI
 /// `--resume` + an incidental `Ctrl+N` deferred during the trust question),
@@ -3062,6 +3067,7 @@ mod welcome_workspace_mode {
             branch: None,
             repo_name: String::new(),
             worktree_label: None,
+            last_turn_summary: None,
             card_detail: None,
         }]);
         let effects = dispatch(Action::PickSession(0), &mut app);
@@ -3107,6 +3113,7 @@ mod welcome_workspace_mode {
             branch: None,
             repo_name: String::new(),
             worktree_label: None,
+            last_turn_summary: None,
             card_detail: None,
         }]);
         let effects = dispatch(Action::PickSession(0), &mut app);
@@ -3166,6 +3173,7 @@ mod welcome_workspace_mode {
             branch: None,
             repo_name: String::new(),
             worktree_label: None,
+            last_turn_summary: None,
             card_detail: None,
         }]);
         let _ = dispatch(Action::PickSessionInWorktree(0), &mut app);
@@ -3203,6 +3211,7 @@ mod welcome_workspace_mode {
             branch: None,
             repo_name: String::new(),
             worktree_label: None,
+            last_turn_summary: None,
             card_detail: None,
         }]);
         let effects = dispatch(Action::PickSessionInWorktree(0), &mut app);
@@ -3247,6 +3256,7 @@ mod welcome_workspace_mode {
             branch: None,
             repo_name: String::new(),
             worktree_label: None,
+            last_turn_summary: None,
             card_detail: None,
         }]);
         let effects = dispatch(Action::PickSessionInWorktree(0), &mut app);
@@ -3290,6 +3300,7 @@ mod welcome_workspace_mode {
             branch: None,
             repo_name: String::new(),
             worktree_label: None,
+            last_turn_summary: None,
             card_detail: None,
         }]);
         let effects = dispatch(Action::PickSession(0), &mut app);
@@ -3336,6 +3347,7 @@ mod welcome_workspace_mode {
             branch: None,
             repo_name: String::new(),
             worktree_label: None,
+            last_turn_summary: None,
             card_detail: None,
         }]);
         let effects = dispatch(Action::PickSession(0), &mut app);
@@ -3409,6 +3421,7 @@ mod welcome_workspace_mode {
             branch: None,
             repo_name: String::new(),
             worktree_label: None,
+            last_turn_summary: None,
             card_detail: None,
         }]);
         let effects = dispatch(Action::PickSession(0), &mut app);
@@ -3482,6 +3495,7 @@ mod welcome_workspace_mode {
             branch: None,
             repo_name: String::new(),
             worktree_label: None,
+            last_turn_summary: None,
             card_detail: None,
         }]);
         let effects = dispatch(Action::PickSession(0), &mut app);
