@@ -648,9 +648,15 @@ fn message_looks_overloaded(message: &str) -> bool {
 /// - Anthropic: `credit_balance_too_low`
 /// - Google Gemini: `RESOURCE_EXHAUSTED`
 /// - Chinese platforms (GLM/Zhipu etc.): `余额不足`, `额度不足`, `额度已用尽`
+/// - xAI first-party: `exceeded the 5-hour usage quota` (caught by the
+///   combined `exceeded` + `quota` check below)
 ///
 /// Deliberately does **not** match bare `quota` or `exceeded` (which appear
-/// in transient "rate limit exceeded" messages) or bare `balance`.
+/// in transient "rate limit exceeded" messages) or bare `balance`. The
+/// combined `exceeded` + `quota` check is safe because transient rate-limit
+/// messages say "rate limit exceeded" (no "quota"), while quota-exhaustion
+/// messages always pair the two words (e.g. "exceeded the 5-hour usage quota",
+/// "exceeded your current quota", "quota exceeded").
 pub fn message_looks_quota_exhausted(message: &str) -> bool {
     let m = message.to_ascii_lowercase();
     m.contains("insufficient_quota")
@@ -666,6 +672,12 @@ pub fn message_looks_quota_exhausted(message: &str) -> bool {
         || m.contains("余额不足")
         || m.contains("额度不足")
         || m.contains("额度已用尽")
+        // Combined check: "exceeded" and "quota" both present. Catches xAI's
+        // "You have exceeded the 5-hour usage quota" and similar phrasings
+        // where the two words are not contiguous (e.g. "exceeded the N-hour
+        // usage quota"). Transient rate-limit messages ("rate limit exceeded")
+        // never contain "quota", so this cannot false-positive on them.
+        || (m.contains("exceeded") && m.contains("quota"))
 }
 
 #[cfg(test)]
@@ -844,6 +856,11 @@ mod tests {
             "余额不足",
             "额度不足",
             "额度已用尽",
+            // xAI first-party quota-exhaustion messages: "exceeded" and "quota"
+            // are present but not contiguous.
+            "TooManyRequests: You have exceeded the 5-hour usage quota. It will reset at 2026-08-10 13:49:35 +0800 CST.",
+            "You have exceeded the daily usage quota.",
+            "Request failed after 2 retries. API error (HTTP 429 (rate limited - please wait and retry)): You have exceeded the 5-hour usage quota.",
         ] {
             assert!(
                 message_looks_quota_exhausted(msg),
