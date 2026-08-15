@@ -65,7 +65,7 @@ pub(super) async fn make_replay_send_update_fixture() -> ReplaySendUpdateFixture
     let state = TokioMutex::new(State {
         running_task: None,
         pending_inputs: VecDeque::new(),
-        combine_edit_holds: std::collections::HashSet::new(),
+        edit_holds: HashMap::new(),
         pending_notifications: Vec::new(),
         notifications_suppressed: false,
         rewindable: false,
@@ -226,6 +226,7 @@ pub(super) async fn make_replay_send_update_fixture() -> ReplaySendUpdateFixture
         mcp_handshakes_done: Arc::new(tokio::sync::Notify::new()),
         user_input_generation: std::sync::atomic::AtomicU64::new(0),
         laziness_debug_log: None,
+        last_live_orphan_reconcile: std::cell::Cell::new(None),
         deferred_prefix: TaskSlot::new(),
         extension_registry: xai_agent_lifecycle::LocalExtensionRegistry::default(),
         last_announced_local_date: std::cell::Cell::new(chrono::Local::now().date_naive()),
@@ -233,6 +234,9 @@ pub(super) async fn make_replay_send_update_fixture() -> ReplaySendUpdateFixture
         last_search_prompt_index: std::sync::atomic::AtomicI64::new(-1),
         last_api_request_at: std::sync::atomic::AtomicI64::new(0),
         hook_registry: std::cell::RefCell::new(None),
+        turn_report: Default::default(),
+        turn_abort: Default::default(),
+        turn_end_tx: Default::default(),
         client_hooks: Default::default(),
         hook_resolved_workspace_root: String::new(),
         vcs_kind: xai_grok_workspace::session::git::VcsKind::Git,
@@ -251,8 +255,9 @@ pub(super) async fn make_replay_send_update_fixture() -> ReplaySendUpdateFixture
         session_turn_active: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
         streaming_turn_capture: parking_lot::Mutex::new(StreamingTurnCapture::default()),
         turn_stream_drained: parking_lot::Mutex::new(None),
-            truncation_continues: std::sync::atomic::AtomicU32::new(0),
-                rate_limit_retries: std::sync::atomic::AtomicU32::new(0),
+        truncation_continues: std::sync::atomic::AtomicU32::new(0),
+        rate_limit_retries: std::sync::atomic::AtomicU32::new(0),
+        pending_image_strip: parking_lot::Mutex::new(None),
         sampler_handle: xai_grok_sampler::SamplerHandle::noop(),
         rebuild_spec: crate::session::agent_rebuild::test_rebuild_spec_default(),
         image_description_model: crate::test_support::TEST_MODEL.to_owned(),
@@ -815,6 +820,7 @@ async fn failed_event_preserves_streaming_capture_for_takeout() {
                         is_retryable: false,
                         retry_after_secs: None,
                         should_retry: None,
+                        error_code: None,
                         model_metadata: None,
                         empty_response_context: None,
                         doom_loop_triggers: None,
@@ -857,6 +863,7 @@ async fn observe_only_confident_completion_stays_warn_only() {
                 Some(xai_grok_sampling_types::DoomLoopRecoveryPolicy {
                     max_threshold: 8,
                     max_retries: 0,
+                    ..Default::default()
                 });
             let actor = Arc::new(fixture.actor);
             *actor
@@ -1227,6 +1234,7 @@ async fn reasoning_only_doomloop_turn_captures_every_generation_as_segments() {
                 is_retryable: false,
                 retry_after_secs: None,
                 should_retry: None,
+                error_code: None,
                 model_metadata: None,
                 empty_response_context: Some(EmptyResponseContext {
                     reason: EmptyReason::ReasoningOnly,
