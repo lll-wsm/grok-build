@@ -585,9 +585,60 @@ fn conversation_to_chat_messages_drops_reasoning_when_user_intervenes() {
     assert_eq!(msgs[1].text_content(), "answer");
     assert_eq!(
         msgs[1].reasoning_content.as_deref(),
-        None,
-        "reasoning separated from the assistant by a user message is dropped"
+        Some(""),
+        "reasoning separated from the assistant by a user message is dropped, \
+         but the assistant still carries an empty reasoning_content placeholder"
     );
+}
+
+#[test]
+fn conversation_to_chat_messages_always_carries_reasoning_content_placeholder() {
+    // DeepSeek thinking mode requires `reasoning_content` on every assistant
+    // turn after the last user message when the request carries tools; an
+    // empty string is the accepted placeholder when no reasoning was
+    // recorded. `serde` skips only `None`, so `Some("")` keeps the key on
+    // the wire.
+    let tool_calls = vec![ToolCall {
+        id: "call_1".into(),
+        name: "read_file".to_string(),
+        arguments: r#"{"path":"src/main.rs"}"#.into(),
+    }];
+
+    // Assistant tool-call turn with no recorded reasoning.
+    let msgs = conversation_to_chat_messages(vec![
+        ConversationItem::user("use the tool"),
+        ConversationItem::assistant_tool_calls(tool_calls.clone()),
+    ]);
+    assert_eq!(msgs.len(), 2);
+    assert_eq!(msgs[1].role, Role::Assistant);
+    assert_eq!(
+        msgs[1].reasoning_content.as_deref(),
+        Some(""),
+        "assistant without recorded reasoning still carries an empty placeholder"
+    );
+
+    let json = serde_json::to_value(&msgs[1]).unwrap();
+    assert_eq!(
+        json.get("reasoning_content").and_then(|v| v.as_str()),
+        Some(""),
+        "the reasoning_content key must be present on the wire (empty is accepted)"
+    );
+
+    // Text-only assistant turns get the same placeholder.
+    let msgs = conversation_to_chat_messages(vec![
+        ConversationItem::user("hi"),
+        ConversationItem::assistant("plain reply"),
+    ]);
+    assert_eq!(msgs[1].reasoning_content.as_deref(), Some(""));
+
+    // Recorded reasoning still folds onto the following assistant and wins
+    // over the placeholder.
+    let msgs = conversation_to_chat_messages(vec![
+        ConversationItem::user("hi"),
+        reasoning_sibling("r1", "step one", None),
+        ConversationItem::assistant_tool_calls(tool_calls),
+    ]);
+    assert_eq!(msgs[1].reasoning_content.as_deref(), Some("step one"));
 }
 
 #[test]

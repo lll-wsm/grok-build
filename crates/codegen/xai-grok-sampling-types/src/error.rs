@@ -977,6 +977,7 @@ mod tests {
             model_metadata: None,
             retry_after_secs: None,
             should_retry: None,
+            error_code: None,
         };
         assert!(vetoed_by_quota.is_retry_vetoed());
 
@@ -1041,12 +1042,14 @@ mod tests {
             model_metadata: None,
             retry_after_secs: None,
             should_retry: None,
+            error_code: None,
         };
         assert!(api.is_quota_exhausted());
         assert!(
             SamplingError::StreamError {
                 error_type: "rate_limit_error".into(),
                 message: "insufficient_quota".into(),
+                code: None,
             }
             .is_quota_exhausted()
         );
@@ -1598,6 +1601,7 @@ mod tests {
             model_metadata: None,
             retry_after_secs: None,
             should_retry: None,
+            error_code: None,
         };
         assert!(err.is_image_processing_error());
         assert!(!err.is_encrypted_content_error());
@@ -1611,6 +1615,7 @@ mod tests {
             model_metadata: None,
             retry_after_secs: None,
             should_retry: None,
+            error_code: None,
         };
         assert!(err.is_image_processing_error());
     }

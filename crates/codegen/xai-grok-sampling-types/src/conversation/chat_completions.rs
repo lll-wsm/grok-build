@@ -187,7 +187,10 @@ pub fn conversation_item_to_chat_message(item: ConversationItem) -> ChatRequestM
 /// The canonical conversion. Each run of `Reasoning` siblings folds into the
 /// `reasoning_content` of the following `Assistant`; a `BackendToolCall` in
 /// between does not break the fold, any other item clears it, and reasoning
-/// with no following assistant is dropped.
+/// with no following assistant is dropped. Every emitted assistant message
+/// always carries `reasoning_content` (the folded reasoning, or an empty
+/// string placeholder): DeepSeek thinking mode rejects assistant turns whose
+/// `reasoning_content` key is absent when the request carries tools.
 pub fn conversation_to_chat_messages(items: Vec<ConversationItem>) -> Vec<ChatRequestMessage> {
     let mut out: Vec<ChatRequestMessage> = Vec::with_capacity(items.len());
     let mut pending_reasoning: Vec<String> = Vec::new();
@@ -205,13 +208,24 @@ pub fn conversation_to_chat_messages(items: Vec<ConversationItem>) -> Vec<ChatRe
                 if !pending_reasoning.is_empty() {
                     msg.reasoning_content = Some(pending_reasoning.join("\n"));
                     pending_reasoning.clear();
+                } else {
+                    // DeepSeek thinking mode requires the `reasoning_content`
+                    // key on every assistant turn once tools are in play; an
+                    // empty string is the accepted placeholder when no
+                    // reasoning was recorded. `Some("")` also survives
+                    // serialization (only `None` is skipped).
+                    msg.reasoning_content = Some(String::new());
                 }
                 out.push(msg);
             }
             ConversationItem::BackendToolCall(_) => {
                 // Keep `pending_reasoning` so it still folds onto the
                 // following assistant, as the Responses path does.
-                out.push(conversation_item_to_chat_message(item));
+                let mut msg = conversation_item_to_chat_message(item);
+                // The synthetic assistant is still an assistant turn on the
+                // wire, so give it the same empty placeholder.
+                msg.reasoning_content = Some(String::new());
+                out.push(msg);
             }
             other => {
                 pending_reasoning.clear();

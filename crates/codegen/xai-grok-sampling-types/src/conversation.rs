@@ -5311,8 +5311,9 @@ mod tests {
         );
         assert_eq!(
             msgs[1].reasoning_content.as_deref(),
-            None,
-            "reasoning lands on the real assistant, not the synthetic BTC message"
+            Some(""),
+            "reasoning lands on the real assistant, not the synthetic BTC \
+             message, which carries only the empty placeholder"
         );
         // The real assistant turn keeps the reasoning that preceded the
         // backend tool call.
