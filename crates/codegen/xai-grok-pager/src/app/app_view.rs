@@ -6,6 +6,7 @@
 use super::ScreenMode;
 use crate::acp::model_state::ModelState;
 use crate::actions::{ActionId, ActionRegistry, When};
+use crate::app::consent::ConsentState;
 use crate::appearance::AppearanceConfig;
 use crate::input::KeyboardNormalizer;
 use crate::input::key::KeyShortcut;
@@ -374,8 +375,12 @@ pub struct SessionPickerEntry {
     /// Human-readable worktree label (if the session was created in a named worktree).
     pub worktree_label: Option<String>,
     /// Per-turn secondary line (`lastTurnSummary` on the session/list wire).
-    /// Used for non-leader roster rows today; reserved for picker display later.
+    /// Shown as the "Last turn" line on the expanded resume card and used for
+    /// non-leader dashboard roster rows.
     pub last_turn_summary: Option<String>,
+    /// Latest session recap (`lastRecap` on the session/list wire), shown on the
+    /// expanded resume card whenever available. Distinct from `last_turn_summary`.
+    pub last_recap: Option<String>,
     /// Lazy-loaded detail for the expanded card view.
     pub card_detail: Option<CardDetail>,
 }
@@ -447,12 +452,12 @@ pub enum InputOutcome {
     /// Dispatch this action, then redraw.
     Action(Action),
     /// Dispatch this action, then re-process the same event through the
-    /// (now-changed) active view. Used when the welcome screen creates a
-    /// new session on the first keystroke so the character lands in the
-    /// session's prompt instead of being consumed.
+    /// (now-changed) active view. The event loop batches both dispatches into
+    /// one effect wave so state from the forward pass may shape the first
+    /// action's meta (e.g. welcome create + CycleMode sharing session/new flags).
     ActionThenForward(Action),
-    /// Dispatch both actions in order, then redraw (e.g. revert preview
-    /// + open reset confirm).
+    /// Dispatch+process the first action, then dispatch+process the second
+    /// (intentional effect barrier between them; e.g. revert preview then open reset).
     ActionPair(Action, Action),
     /// Arm a double-press pending action (e.g. idle Esc clear/rewind).
     /// AppView installs [`PendingAction`]; second press within `ttl` fires
@@ -863,6 +868,13 @@ pub struct AppView {
     pub welcome_refresh_rect: Option<ratatui::layout::Rect>,
     /// Hit-test rect for the gate URL link on the paywall CTA.
     pub welcome_gate_url_rect: Option<ratatui::layout::Rect>,
+    /// Rewritten by every welcome frame, so a resize leaves no stale click target.
+    pub welcome_consent_link_rects: Vec<(usize, ratatui::layout::Rect)>,
+    /// Consent link the mouse is over, so every run of a wrapped link brightens together.
+    pub welcome_consent_hover_link: Option<usize>,
+    /// The disk write is a spawned task, so a settings refresh that lands first would otherwise
+    /// re-arm a notice the user has already accepted.
+    pub consent_answered: Option<(String, i32)>,
     /// Hit-test rect for the welcome hero upgrade CTA `[label]` button
     /// (click → `AnnouncementsOpenCta(Welcome)`).
     pub welcome_upgrade_cta_rect: Option<ratatui::layout::Rect>,
@@ -1062,6 +1074,10 @@ pub struct AppView {
     /// when `Pending`, the welcome screen shows the trust question and session
     /// creation is deferred (gated after auth) until it is answered.
     pub trust_state: TrustState,
+    /// Resolves before folder trust: the account-level answer gates the workspace-level one.
+    pub consent_state: crate::app::consent::ConsentState,
+    /// Scopes the consent answer, the only identity the pager has for it.
+    pub account_email: Option<String>,
     /// Login button label from `AuthMethod.name` (e.g., "grok.com", "Acme Corp").
     pub login_label: Option<String>,
     /// The auth method ID to use for login.
@@ -1309,7 +1325,9 @@ impl AppView {
     /// startup sites; trust is gated AFTER auth so a pending trust question
     /// defers session creation until answered.
     pub fn session_startup_allowed(&self) -> bool {
-        matches!(self.auth_state, AuthState::Done) && matches!(self.trust_state, TrustState::Done)
+        matches!(self.auth_state, AuthState::Done)
+            && matches!(self.trust_state, TrustState::Done)
+            && matches!(self.consent_state, ConsentState::Done)
     }
     /// Whether startup type-ahead captured while the app was loading may be
     /// replayed into the input channel: every startup screen that consumes raw
@@ -1323,6 +1341,7 @@ impl AppView {
             && self.has_access()
             && !self.is_zdr_blocked()
             && matches!(self.trust_state, TrustState::Done)
+            && matches!(self.consent_state, ConsentState::Done)
     }
     /// Extract `GateInfo` from `RemoteSettings`.
     pub fn gate_from_settings(
@@ -1342,6 +1361,7 @@ impl AppView {
     pub fn apply_auth_meta(&mut self, meta: &xai_grok_shell::auth::AuthMeta) {
         self.pending_gate_verification = None;
         let was_gated = self.gate.is_some();
+        self.account_email = meta.email.clone();
         self.team_id = meta.team_id.clone();
         self.team_name = meta.team_name.clone();
         self.is_zdr = meta.is_zdr;
@@ -1494,6 +1514,9 @@ impl AppView {
             welcome_auth_fallback_rect: None,
             welcome_refresh_rect: None,
             welcome_gate_url_rect: None,
+            welcome_consent_link_rects: Vec::new(),
+            welcome_consent_hover_link: None,
+            consent_answered: None,
             welcome_upgrade_cta_rect: None,
             welcome_privacy_banner_opt_in_rect: None,
             welcome_privacy_banner_opt_out_rect: None,
@@ -1571,6 +1594,8 @@ impl AppView {
             auth_methods: Vec::new(),
             auth_state: AuthState::Done,
             trust_state: TrustState::Done,
+            consent_state: crate::app::consent::ConsentState::Done,
+            account_email: None,
             login_label: None,
             login_method_id: None,
             auth_start_mode: AuthMode::Pending,
@@ -2220,6 +2245,7 @@ impl AppView {
     }
     /// Apply a (possibly hot-reloaded) appearance config to all agents.
     pub fn set_appearance(&mut self, config: AppearanceConfig) {
+        crate::render::bidi::set_enabled(config.scrollback.display.rtl_bidi);
         for agent in self.agents.values_mut() {
             agent.scrollback.set_appearance(config.clone());
             for child in agent.subagent_views.values_mut() {
@@ -2528,6 +2554,10 @@ impl AppView {
                 &mut WelcomeInputCtx {
                     auth_state: &self.auth_state,
                     trust_state: &self.trust_state,
+                    consent_state: &self.consent_state,
+                    consent_link_rects: &self.welcome_consent_link_rects,
+                    consent_hover_link: &mut self.welcome_consent_hover_link,
+                    arrived_at,
                     cwd: &self.cwd,
                     mid_session_login: self.auth_return_view.is_some(),
                     auth_code_input: &mut self.auth_code_input,
@@ -2856,7 +2886,7 @@ impl AppView {
                                 d.close_popup();
                             }
                             if let Some(agent) = self.agents.get_mut(&agent_id) {
-                                agent.active_subagent = None;
+                                agent.close_subagent_fullscreen();
                             }
                             return InputOutcome::Changed;
                         }
@@ -2903,7 +2933,7 @@ impl AppView {
                                 d.close_popup();
                             }
                             if let Some(agent) = self.agents.get_mut(&agent_id) {
-                                agent.active_subagent = None;
+                                agent.close_subagent_fullscreen();
                             }
                             return InputOutcome::Changed;
                         }
@@ -2935,7 +2965,7 @@ impl AppView {
                                     d.close_popup();
                                 }
                                 if let Some(agent) = self.agents.get_mut(&agent_id) {
-                                    agent.active_subagent = None;
+                                    agent.close_subagent_fullscreen();
                                 }
                                 return InputOutcome::Changed;
                             }
@@ -3143,6 +3173,11 @@ struct WelcomeInputCtx<'a> {
     /// Folder-trust state. When `Pending` (and auth is `Done`), the trust
     /// question intercepts keys and swallows the rest so no session starts.
     trust_state: &'a TrustState,
+    consent_state: &'a ConsentState,
+    consent_link_rects: &'a [(usize, ratatui::layout::Rect)],
+    consent_hover_link: &'a mut Option<usize>,
+    /// When this event reached the process, so a key typed before the notice painted is no answer.
+    arrived_at: Instant,
     /// Live working directory (tracks `Effect::SetWorkingDir`), used to pin
     /// the current repo's group to the top of the session picker.
     cwd: &'a std::path::Path,
@@ -3335,6 +3370,23 @@ fn handle_welcome_input(ev: &Event, ctx: &mut WelcomeInputCtx<'_>) -> InputOutco
             NewWorktreeDialogOutcome::Changed => return InputOutcome::Changed,
             NewWorktreeDialogOutcome::Unchanged => return InputOutcome::Unchanged,
         }
+    }
+    if matches!(ctx.auth_state, AuthState::Done)
+        && ctx.has_access
+        && !ctx.is_zdr_blocked
+        && matches!(ctx.consent_state, ConsentState::Pending { .. })
+    {
+        return crate::app::consent::handle_answer(
+            ev,
+            &mut crate::app::consent::ConsentInputCtx {
+                state: ctx.consent_state,
+                arrived_at: ctx.arrived_at,
+                menu_rects: ctx.menu_rects,
+                link_rects: ctx.consent_link_rects,
+                menu_index: ctx.menu_index,
+                hover_link: ctx.consent_hover_link,
+            },
+        );
     }
     if matches!(ctx.auth_state, AuthState::Done)
         && ctx.has_access
@@ -3763,6 +3815,7 @@ fn handle_welcome_input(ev: &Event, ctx: &mut WelcomeInputCtx<'_>) -> InputOutco
             return InputOutcome::ActionThenForward(Action::NewSession);
         }
         if *ctx.prompt_focused {
+            let had_highlight = ctx.prompt.textarea.selection_range().is_some();
             match ctx.prompt.handle_key(key) {
                 crate::views::prompt_widget::PromptEvent::Edited => {
                     return InputOutcome::Changed;
@@ -3770,6 +3823,9 @@ fn handle_welcome_input(ev: &Event, ctx: &mut WelcomeInputCtx<'_>) -> InputOutco
                 crate::views::prompt_widget::PromptEvent::Ignored => {
                     if key!(Esc).matches(key) {
                         *ctx.prompt_focused = false;
+                        return InputOutcome::Changed;
+                    }
+                    if had_highlight && ctx.prompt.textarea.selection_range().is_none() {
                         return InputOutcome::Changed;
                     }
                 }
@@ -4565,6 +4621,8 @@ impl AppView {
                             cwd: &self.cwd,
                             auth_state: &self.auth_state,
                             trust_state: &self.trust_state,
+                            consent_state: &self.consent_state,
+                            consent_hover_link: self.welcome_consent_hover_link,
                             login_label: self.login_label.as_deref(),
                             auth_code_input: self.auth_code_input.text(),
                             auth_code_cursor_byte: self.auth_code_input.cursor_byte(),
@@ -4640,6 +4698,11 @@ impl AppView {
                         self.welcome_auth_fallback_rect = result.auth_fallback_rect;
                         self.welcome_refresh_rect = result.refresh_rect;
                         self.welcome_gate_url_rect = result.gate_url_rect;
+                        self.welcome_consent_link_rects = result.consent_link_rects;
+                        if self.welcome_consent_link_rects.is_empty() {
+                            self.welcome_consent_hover_link = None;
+                        }
+                        record_consent_paint(&mut self.consent_state, result.consent_legibility);
                         self.welcome_upgrade_cta_rect = result.upgrade_cta_rect;
                         self.welcome_privacy_banner_opt_in_rect = result.privacy_banner_opt_in_rect;
                         self.welcome_privacy_banner_opt_out_rect =
@@ -5153,6 +5216,28 @@ impl AppView {
         }
     }
 }
+/// The renderer is the only thing that knows whether the body fitted, and accept is gated on that.
+fn record_consent_paint(
+    state: &mut ConsentState,
+    reported: Option<crate::app::consent::ConsentLegibility>,
+) {
+    let ConsentState::Pending {
+        legibility,
+        painted_at,
+        ..
+    } = state
+    else {
+        return;
+    };
+    let Some(painted) = reported else {
+        *legibility = crate::app::consent::ConsentLegibility::Illegible;
+        return;
+    };
+    *legibility = painted;
+    if painted_at.is_none() {
+        *painted_at = Some(Instant::now());
+    }
+}
 impl AppView {
     /// True when any modal that should swallow scroll input is open.
     fn is_scroll_blocking_modal_open(&self) -> bool {
@@ -5405,7 +5490,6 @@ impl AppView {
         {
             needs_redraw |= agent.scrollback.tick();
             needs_redraw |= agent.todo.list_state.tick();
-            needs_redraw |= agent.todo.badge_tick();
             needs_redraw |= agent.tasks.tick();
             for child_view in agent.subagent_views.values_mut() {
                 needs_redraw |= child_view.scrollback.tick();
@@ -5728,7 +5812,6 @@ impl AppView {
                 };
                 let fast = agent.scrollback.needs_animation()
                     || agent.todo.list_state.needs_tick()
-                    || agent.todo.badge_needs_tick()
                     || agent.tasks.needs_tick()
                     || agent.acp_synced_generation != agent.session.available_commands_generation
                     || !agent.session.state.is_idle()

@@ -428,7 +428,11 @@ pub(crate) async fn create_test_actor_with_terminal(
         recap_epoch: std::cell::Cell::new(0),
         turn_summary_task: std::cell::RefCell::new(None),
         turn_summary_generation: std::cell::Cell::new(0),
+        title_refresh_task: std::cell::RefCell::new(None),
+        title_refresh_generation: std::cell::Cell::new(0),
+        next_title_refresh_idx: std::cell::Cell::new(0),
         turn_summary_enabled: false,
+        title_refresh_enabled: false,
         session_turn_active: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
         streaming_turn_capture: parking_lot::Mutex::new(StreamingTurnCapture::default()),
         turn_stream_drained: parking_lot::Mutex::new(None),
@@ -499,7 +503,7 @@ pub(crate) fn user_item_with_rx(
         screen_mode: None,
         verbatim: false,
         json_schema: None,
-        origin: crate::session::PromptOrigin::User,
+        input_origin: InputOrigin::new(crate::session::PromptOrigin::User),
         task_wake_fallback: None,
         tool_overrides_update: None,
         respond_to,
@@ -514,6 +518,7 @@ pub(crate) fn user_item_with_rx(
             text,
             combined_texts: None,
         }),
+        queue_mutation_policy: QueueMutationPolicy::editable(),
         send_now: false,
     };
     (item, rx)
@@ -531,6 +536,7 @@ pub(crate) fn input_with_origin_rx(
 ) -> (InputItem, oneshot::Receiver<PromptTurnResult>) {
     let (respond_to, rx) = oneshot::channel();
     let verbatim = origin.is_synthetic();
+    let input_origin = InputOrigin::new(origin);
     let item = InputItem {
         prompt_id: prompt_id.to_string(),
         prompt_blocks: vec![],
@@ -541,13 +547,14 @@ pub(crate) fn input_with_origin_rx(
         screen_mode: None,
         verbatim,
         json_schema: None,
-        origin,
+        input_origin,
         task_wake_fallback: None,
         tool_overrides_update: None,
         respond_to,
         persist_ack: None,
         parsed_prompt_tx: None,
         queue_meta: None,
+        queue_mutation_policy: QueueMutationPolicy::hidden(),
         send_now: false,
     };
     (item, rx)
@@ -559,7 +566,7 @@ pub(crate) fn queue_input_request(
     prompt_id: &str,
     respond_to: oneshot::Sender<PromptTurnResult>,
 ) -> QueueInputRequest {
-    QueueInputRequest::new(
+    QueueInputRequest::from_legacy_prompt_id(
         prompt_blocks,
         prompt_id.to_string(),
         PromptMode::Agent,
@@ -666,5 +673,14 @@ pub(crate) async fn actor_with_persistence_drain() -> std::sync::Arc<SessionActo
             }
         }
     });
-    std::sync::Arc::new(create_test_actor(0, 256_000, 85, gateway_tx, persistence_tx).await)
+    let (actor, _) = create_test_actor_with_terminal(
+        0,
+        256_000,
+        85,
+        gateway_tx,
+        persistence_tx,
+        Arc::new(DummyTerminal),
+    )
+    .await;
+    std::sync::Arc::new(actor)
 }
